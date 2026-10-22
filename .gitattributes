@@ -1,0 +1,9 @@
+# Store and check out text as LF on every machine. Without this, Git for Windows'
+# default (core.autocrlf=true) rewrites the working copy to CRLF on checkout, which
+# churns every file and breaks exact-text edits that match on "\n".
+* text=auto eol=lf
+
+# Never touch these: tesseract's language model and images are binary.
+*.traineddata binary
+*.png binary
+*.ico binary

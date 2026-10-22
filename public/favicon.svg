@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Dark background -->
+  <rect width="256" height="256" rx="44" fill="#111417"/>
+
+  <!-- Pentagon: center (128,140), orbit radius 76 -->
+  <!-- W top (128,64), U top-right (200,116), B bottom-right (172,200), R bottom-left (84,200), G top-left (56,116) -->
+
+  <!-- W – White -->
+  <circle cx="128" cy="64" r="38" fill="#ddd8cc"/>
+  <!-- Sun: 8 rays + center disc -->
+  <g stroke="#9a9080" stroke-width="3.5" stroke-linecap="round">
+    <line x1="128" y1="37" x2="128" y2="30"/>
+    <line x1="147" y1="43" x2="151" y2="37"/>
+    <line x1="157" y1="62" x2="163" y2="62"/>
+    <line x1="147" y1="81" x2="151" y2="87"/>
+    <line x1="128" y1="87" x2="128" y2="94"/>
+    <line x1="109" y1="81" x2="105" y2="87"/>
+    <line x1="99"  y1="62" x2="93"  y2="62"/>
+    <line x1="109" y1="43" x2="105" y2="37"/>
+  </g>
+  <circle cx="128" cy="64" r="13" fill="#b0a898"/>
+
+  <!-- U – Blue -->
+  <circle cx="200" cy="116" r="38" fill="#2f72b0"/>
+  <!-- Water drop -->
+  <path d="M200 82 C200 82 224 106 224 120 C224 134 213 144 200 144 C187 144 176 134 176 120 C176 106 200 82 200 82Z" fill="#1a5898"/>
+  <path d="M200 90 C200 90 216 108 216 119" stroke="#74b8e8" stroke-width="2.8" stroke-linecap="round" fill="none"/>
+
+  <!-- B – Black -->
+  <circle cx="172" cy="200" r="38" fill="#1a1a1a" stroke="#4a4a4a" stroke-width="3.5"/>
+  <!-- Skull -->
+  <ellipse cx="172" cy="195" rx="15" ry="14" fill="#6a6a6a"/>
+  <ellipse cx="166" cy="195" rx="4.5" ry="5.5" fill="#1a1a1a"/>
+  <ellipse cx="178" cy="195" rx="4.5" ry="5.5" fill="#1a1a1a"/>
+  <rect x="164" y="205" width="16" height="8" rx="2.5" fill="#6a6a6a"/>
+  <line x1="172" y1="205" x2="172" y2="213" stroke="#1a1a1a" stroke-width="2.5"/>
+
+  <!-- R – Red -->
+  <circle cx="84" cy="200" r="38" fill="#b54228"/>
+  <!-- Flame -->
+  <path d="M84 170 C84 170 100 184 101 196 C102 205 97 214 89 216 C91 210 91 204 87 200 C85 207 82 212 77 215 C71 211 66 204 67 195 C68 183 84 170 84 170Z" fill="#e8803a"/>
+  <path d="M84 178 C84 178 95 190 95 198" stroke="#ffcc70" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+
+  <!-- G – Green -->
+  <circle cx="56" cy="116" r="38" fill="#3d7a3a"/>
+  <!-- Tree: layered triangles + trunk -->
+  <polygon points="56,82 74,108 38,108" fill="#1e4d1c"/>
+  <polygon points="56,92 72,116 40,116" fill="#2a6628"/>
+  <rect x="53" y="115" width="6" height="11" rx="1.5" fill="#1a3f18"/>
+</svg>
