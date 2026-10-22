@@ -168,6 +168,8 @@ class LogParser {
     this.objectTapped = new Map()
     // instanceId -> latest { power, toughness }, with every modifier already applied.
     this.objectStats = new Map()
+    // Instances that are copies (`isCopy`), such as an offspring token.
+    this.objectCopies = new Set()
     // Ability instance -> the grpId of the card it came from.
     this.abilitySource = new Map()
     // Ability instance -> the instanceId of the permanent that created it.
@@ -571,6 +573,9 @@ class LogParser {
       // then 8/7 once its exile bonus switched on). A value only arrives when it
       // changes, so the last one is kept. **An empty `{}` is zero** — protobuf omits
       // a 0, the same trap as `isTapped` — so presence decides, not the value.
+      // Presence-authoritative, like isTapped: protobuf drops a false.
+      if (object.isCopy) this.objectCopies.add(object.instanceId)
+      else this.objectCopies.delete(object.instanceId)
       if (object.power || object.toughness) {
         const previous = this.objectStats.get(object.instanceId) || {}
         this.objectStats.set(object.instanceId, {
@@ -625,6 +630,7 @@ class LogParser {
       this.objectZone = new Map()
       this.objectTapped = new Map()
       this.objectStats = new Map()
+      this.objectCopies = new Set()
       this.abilitySource = new Map()
       this.abilityInstanceOwner = new Map()
       this.abilityInstances = new Set()
@@ -948,9 +954,27 @@ class LogParser {
         const token = this.nameOf(id)
         const seat = this.objectController.get(id) ?? annotation.affectorId
         const source = this.sourceOf(annotation.affectorId)
-        this.push('token',
-          `${this.seatLabel(seat)} creates ${withArticle(token || 'token')}${source ? ` (${source})` : ''}`,
-          { seat, card: token, source })
+        const credit = source ? ` (${source})` : ''
+        // Always called a token, so a token named after a real card cannot read as the
+        // card, and the single form agrees with the counted "creates 2 Map tokens".
+        // A copy says so, with its size: offspring makes "a 1/1 token copy", not the
+        // 2/1 card, and the object is flagged isCopy with its own stats.
+        const isCopy = this.objectCopies.has(id)
+        const stats = this.objectStats.get(id) || {}
+        const size = stats.power != null && stats.toughness != null ? `${stats.power}/${stats.toughness}` : ''
+        const what = isCopy
+          ? `a ${size ? `${size} ` : ''}token copy of ${token || 'a permanent'}`
+          : `${withArticle(token || 'token')} token`
+        this.push('token', `${this.seatLabel(seat)} creates ${what}${credit}`, {
+          seat,
+          card: token,
+          source,
+          isCopy,
+          size,
+          // Which token this is, for the hover: the renderer looks it up by name and
+          // size among *tokens*, since the plain name belongs to the real card.
+          tokenRefs: token ? [{ name: token, power: stats.power, toughness: stats.toughness }] : [],
+        })
       }
     }
 
@@ -1539,6 +1563,7 @@ function withArticle(name) {
 // never fold together.
 function sameToken(a, b) {
   return sameActor(a, b) && (a.card || null) === (b.card || null)
+    && Boolean(a.isCopy) === Boolean(b.isCopy) && (a.size || '') === (b.size || '')
 }
 
 // "creates 2 Map tokens", not "creates a Map and creates a Map". The count is put
@@ -1547,10 +1572,13 @@ function sameToken(a, b) {
 function tokenDescriber(run) {
   const { who } = splitOn(run[0].text, ' creates ')
   const name = run[0].card || 'token'
-  return {
-    ...run[0],
-    text: `${who} creates ${run.length} ${name} tokens${run[0].source ? ` (${run[0].source})` : ''}`,
-  }
+  const credit = run[0].source ? ` (${run[0].source})` : ''
+  // Copies keep their size after the name, so two numbers never sit side by side
+  // ("2 1/1 token copies").
+  const what = run[0].isCopy
+    ? `${run.length} token copies of ${name}${run[0].size ? `, each ${run[0].size}` : ''}`
+    : `${run.length} ${name} tokens`
+  return { ...run[0], text: `${who} creates ${what}${credit}` }
 }
 
 function runDescriber(verb) {
@@ -1977,6 +2005,7 @@ function mergeSharedSource(events) {
         card: null,
         cards,
         origins,
+        tokenRefs: [...(previous.tokenRefs || []), ...(event.tokenRefs || [])],
         subjects,
       }
       continue
@@ -2000,6 +2029,8 @@ function mergeSharedSource(events) {
       card: null,
       cards,
       origins,
+      // Carried so a token folded into a sentence keeps its hover.
+      tokenRefs: [...(previous.tokenRefs || []), ...(event.tokenRefs || [])],
       // A merged sentence has no single predicate left to factor against.
       predicate: null,
     }

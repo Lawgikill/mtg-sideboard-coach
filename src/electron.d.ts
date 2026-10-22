@@ -16,6 +16,9 @@ type MtgaGameEvent = {
   // and keeps a single `fromZone`, so without this the cards it named are lost to
   // anything reading the narration for ownership.
   origins?: Array<{ card?: string | null; seat?: number; fromZone?: string; kind?: string }>
+  // Tokens named on this line, with their size, so the hover can find the token record
+  // rather than a real card of the same name.
+  tokenRefs?: Array<{ name: string; power?: number; toughness?: number }>
 }
 
 type MtgaGame = {

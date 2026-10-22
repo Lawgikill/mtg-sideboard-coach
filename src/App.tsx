@@ -45,7 +45,7 @@ import 'mana-font/css/mana.css'
 import './App.css'
 import { createId, inferDeckColorProfile, normalizeCardName, parseArenaDecklist, serializeArenaDecklist } from './arena'
 import { buildJournalText, inferGameStart, JOURNAL_NOTES_PROMPTS, summarizeJournal, UNSPECIFIED_OPPONENT } from './journalExport'
-import { buildReplaySummaries, buildReplayText, gameNotesFromReplay, describeEndReason, describeStart, formatMatchFormat, matchRecord, opponentLabel, replayFileName, summaryCardLabel } from './replayExport'
+import { buildReplaySummaries, buildReplayText, gameNotesFromReplay, describeEndReason, describeStart, formatMatchFormat, matchRecord, opponentLabel, replayFileName, summaryCardLabel, tokenPreviewAt } from './replayExport'
 import type { ReplayDecklist, ReplaySummary } from './replayExport'
 import { buildReplayHtml } from './replayHtml'
 import { buildZip, uniqueNames } from './zip'
@@ -3400,7 +3400,8 @@ function ReplayText({ event, cardByName }: { event: MtgaGameEvent; cardByName: M
       parts.push(plain)
       plain = ''
     }
-    parts.push(<ReplayCardName name={hit} card={cardByName.get(normalizeCardName(hit))} key={parts.length} />)
+    const card = tokenPreviewAt(event.text, at, hit, event, cardByName) ?? cardByName.get(normalizeCardName(hit))
+    parts.push(<ReplayCardName name={hit} card={card} key={parts.length} />)
     at += hit.length
   }
   if (plain) parts.push(plain)

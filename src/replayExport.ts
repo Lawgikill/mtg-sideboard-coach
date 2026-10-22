@@ -4,6 +4,7 @@
 
 import type { CardRecord, DeckEntry } from './types'
 import { normalizeCardName } from './arena'
+import { tokenKey } from './scryfall'
 import { observedCardsInGame, observedOpponentCards } from './archetypeGuess'
 
 const RULE = '='.repeat(60)
@@ -94,6 +95,29 @@ export type ReplayDecklist = {
   label: string
   counts: string
   sections: ReplayDecklistSection[]
+}
+
+// The token record for a name in a narration line, when that occurrence *is* the
+// token: directly after "token copy of", or directly before " token"/" tokens".
+// Anything else — the "(Pawpatch Recruit)" credit beside a Pawpatch Recruit token
+// copy — is the real card and returns null, as does a token the database lacks.
+// Shared by the screen and the HTML export so the two cannot pick differently.
+export function tokenPreviewAt(
+  text: string,
+  at: number,
+  name: string,
+  event: MtgaGameEvent,
+  cardByName: Map<string, CardRecord>,
+): CardRecord | null {
+  const copyOf = 'token copy of '
+  const isToken = text.slice(Math.max(0, at - copyOf.length), at) === copyOf
+    || /^ tokens?\b/.test(text.slice(at + name.length))
+  if (!isToken) return null
+
+  const normalized = normalizeCardName(name)
+  const ref = (event.tokenRefs ?? []).find((entry) => entry.name === name)
+  const sized = ref && ref.power != null ? cardByName.get(tokenKey(normalized, ref.power, ref.toughness)) : undefined
+  return sized ?? cardByName.get(tokenKey(normalized)) ?? null
 }
 
 export function summaryCardLabel(name: string, count: number): string {

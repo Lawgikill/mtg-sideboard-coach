@@ -333,6 +333,16 @@ async function decompressIfGzipped(bytes: Uint8Array): Promise<string> {
   return new Response(stream).text()
 }
 
+// Keys under which tokens are also indexed. A token often shares its name with a real
+// card (an offspring token is named after its card), and the plain name rightly
+// belongs to the card, so a token is reached through these instead. The sized key
+// tells same-named tokens apart: Soldier tokens come in several sizes.
+export function tokenKey(normalizedName: string, power?: string | number, toughness?: string | number) {
+  return power != null && toughness != null
+    ? `token:${normalizedName}:${power}/${toughness}`
+    : `token:${normalizedName}`
+}
+
 export function createCardIndexes(cards: CardRecord[]) {
   const byId = new Map<string, CardRecord>()
   const byName = new Map<string, CardRecord>()
@@ -362,6 +372,12 @@ export function createCardIndexes(cards: CardRecord[]) {
 
   cards.forEach((card) => {
     byId.set(card.id, card)
+    if (card.isToken) {
+      // First one wins on a clash, so the result follows the stored order.
+      for (const key of [tokenKey(card.normalizedName), tokenKey(card.normalizedName, card.power, card.toughness)]) {
+        if (!byName.has(key)) byName.set(key, card)
+      }
+    }
     claim(card.normalizedName, card, true)
     byName.set(card.id, card)
     card.aliases?.forEach((alias) => claim(normalizeCardName(alias), card, false))

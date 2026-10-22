@@ -10,7 +10,7 @@
 
 import type { CardRecord } from './types'
 import { normalizeCardName } from './arena'
-import { formatMatchFormat, matchRecord, opponentLabel, summaryCardLabel } from './replayExport'
+import { formatMatchFormat, matchRecord, opponentLabel, summaryCardLabel, tokenPreviewAt } from './replayExport'
 import type { ReplayDecklist, ReplayExtras, ReplaySummary } from './replayExport'
 
 const KIND_COLORS: Record<string, string> = {
@@ -57,7 +57,12 @@ function previewImages(card?: CardRecord): string[] {
 // Wraps each card name the event declared, exactly as the on-screen narration does:
 // the names come from the event rather than being searched for, so no stray word in
 // the prose can light up.
-function renderText(text: string, names: string[], cardByName: Map<string, CardRecord>): string {
+function renderText(
+  text: string,
+  names: string[],
+  cardByName: Map<string, CardRecord>,
+  event?: MtgaGameEvent,
+): string {
   const wanted = [...new Set(names.filter(Boolean))].sort((a, b) => b.length - a.length)
   if (wanted.length === 0) return escapeHtml(text)
 
@@ -75,7 +80,8 @@ function renderText(text: string, names: string[], cardByName: Map<string, CardR
     out += escapeHtml(plain)
     plain = ''
 
-    const images = previewImages(cardByName.get(normalizeCardName(hit)))
+    const token = event ? tokenPreviewAt(text, at, hit, event, cardByName) : null
+    const images = previewImages(token ?? cardByName.get(normalizeCardName(hit)))
     out += images.length > 0
       ? `<span class="c">${escapeHtml(hit)}<span class="p">${
         images.map((url) => `<img src="${escapeHtml(url)}" alt="" loading="lazy">`).join('')
@@ -190,7 +196,7 @@ function renderGame(
 
   const lines = game.events.map((event) => {
     const names = [...(event.cards ?? []), ...(event.card ? [event.card] : [])].filter(Boolean)
-    const body = renderText(event.text, names, cardByName)
+    const body = renderText(event.text, names, cardByName, event)
     if (event.kind === 'turn') return `<h3>${body}</h3>`
     return `<p class="e ${escapeHtml(event.kind)}">${body}</p>`
   })
