@@ -155,6 +155,8 @@ class LogParser {
     this.objectTypes = new Map()
     this.objectZone = new Map()
     this.objectTapped = new Map()
+    // instanceId -> latest { power, toughness }, with every modifier already applied.
+    this.objectStats = new Map()
     // Ability instance -> the grpId of the card it came from.
     this.abilitySource = new Map()
     // Ability instance -> the instanceId of the permanent that created it.
@@ -504,6 +506,18 @@ class LogParser {
       // previous value forward instead left every land reading as permanently
       // tapped, since untapping is exactly the message that omits the field.
       this.objectTapped.set(object.instanceId, Boolean(object.isTapped))
+      // Live power/toughness: counters, equipment, pumps and conditional bonuses are
+      // already applied (Keen-Eyed Curator read 3/3, then 4/3 with Lavaspur Boots,
+      // then 8/7 once its exile bonus switched on). A value only arrives when it
+      // changes, so the last one is kept. **An empty `{}` is zero** — protobuf omits
+      // a 0, the same trap as `isTapped` — so presence decides, not the value.
+      if (object.power || object.toughness) {
+        const previous = this.objectStats.get(object.instanceId) || {}
+        this.objectStats.set(object.instanceId, {
+          power: object.power ? object.power.value || 0 : previous.power,
+          toughness: object.toughness ? object.toughness.value || 0 : previous.toughness,
+        })
+      }
       // An ability on the stack carries the card it came from. Without this the
       // token line can only say a token appeared, not what made it.
       if (object.type === 'GameObjectType_Ability') {
@@ -550,6 +564,7 @@ class LogParser {
       this.objectTypes = new Map()
       this.objectZone = new Map()
       this.objectTapped = new Map()
+      this.objectStats = new Map()
       this.abilitySource = new Map()
       this.abilityInstanceOwner = new Map()
       this.abilityInstances = new Set()
@@ -589,6 +604,13 @@ class LogParser {
     return this.nameOf(targetId) || 'a permanent'
   }
 
+  // "(8/7)", or empty when the size was never reported.
+  statsLabel(instanceId) {
+    const stats = this.objectStats.get(instanceId)
+    if (!stats || stats.power == null || stats.toughness == null) return ''
+    return `(${stats.power}/${stats.toughness})`
+  }
+
   trackCombat(object) {
     const id = object.instanceId
 
@@ -597,9 +619,13 @@ class LogParser {
       if (object.attackState === 'AttackState_Declared') {
         const name = this.nameOf(id) || 'A creature'
         const target = this.targetLabel(object.attackInfo ? object.attackInfo.targetId : null)
-        this.push('attack', `${name} attacks ${target}`, {
+        // Size at the moment of attacking, which is when it decides anything. Combat
+        // is the one place P/T earns a mention, and here it adds no extra line.
+        const stats = this.statsLabel(id)
+        this.push('attack', `${name}${stats ? ` ${stats}` : ''} attacks ${target}`, {
           seat: object.controllerSeatId,
           card: this.nameOf(id),
+          stats,
           targetId: object.attackInfo ? object.attackInfo.targetId : null,
           targetLabel: target,
         })
@@ -1569,7 +1595,11 @@ function sameTarget(a, b) {
 
 function attackDescriber(run) {
   const names = run.map((entry) => entry.card).filter(Boolean)
-  const subject = names.length === run.length ? joinList(countedList(names)) : `${run.length} creatures`
+  // Each attacker keeps its own size. Counting runs on name *and* size, so two
+  // identical Llanowar Elves read "2 Llanowar Elves (1/1)" while a pumped one stays
+  // separate.
+  const labels = run.map((entry) => (entry.card ? `${entry.card}${entry.stats ? ` ${entry.stats}` : ''}` : null))
+  const subject = names.length === run.length ? joinList(countedList(labels)) : `${run.length} creatures`
   return {
     turn: run[0].turn,
     kind: 'attack',
