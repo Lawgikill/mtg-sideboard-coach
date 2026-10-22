@@ -1144,8 +1144,13 @@ class LogParser {
       // A spell countered on the stack. This is the one case where the log names the
       // cause outright, unlike the "nil" transfer below, which only says a spell left
       // the stack without resolving and cannot tell a counterspell from a fizzle.
-      case 'Countered':
-        return this.push('unresolved', `${card} is countered`, { seat, card: name })
+      // The transfer's affector is the spell that did the countering, so the credit
+      // comes from the log rather than from guessing at whatever was cast just before.
+      case 'Countered': {
+        const cause = this.causeOf(annotation, name)
+        return this.push('unresolved', `${card} is countered${cause ? ` (${cause})` : ''}`,
+          { seat, card: name, source: cause })
+      }
 
       // "Put" is how a look-at-the-top effect reports its outcome — Sleight of Hand
       // taking one card and bottoming the other. Which way it went is the whole
