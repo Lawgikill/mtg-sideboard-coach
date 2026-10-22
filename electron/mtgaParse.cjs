@@ -37,7 +37,38 @@ function abilityEffect(text, cardName) {
     .trim()
   const colon = cleaned.indexOf(': ')
   const effect = colon === -1 ? cleaned : cleaned.slice(colon + 2)
-  return effect.replace(/\.$/, '') || null
+  return dropRestrictions(effect).replace(/\.$/, '') || null
+}
+
+// Sentences saying when an ability may be activated ("Activate only as a sorcery",
+// "…only once each turn", "…only if you control…") are dropped from activation lines.
+// They describe legality, not what happened, and an activation that appears in the
+// log has by definition already satisfied them, so in a replay they can never say
+// anything. MTGA templates all ~620 of them as a sentence starting `Activate only`.
+//
+// Two traps, both found in MTGA's own ability table:
+// - a restriction can follow a closing quote (`…can't be blocked." Activate only as a
+//   sorcery`), so sentences split after `.` *or* `."`;
+// - a restriction can sit inside a quoted ability the card grants to something else,
+//   and cutting that would describe the wrong ability and strand a quote mark, so
+//   only sentences outside quotes are dropped.
+//
+// The original whitespace between kept sentences is preserved. Rejoining with plain
+// spaces collapsed the line breaks between modal bullets (`Choose one — •A •B`) in
+// hundreds of abilities that have no restriction at all.
+function dropRestrictions(effect) {
+  // Splitting on a captured separator keeps it: [sentence, gap, sentence, gap, …].
+  const parts = effect.split(/((?<=[.!]"?)\s+)/)
+  let out = ''
+  let quotes = 0
+  for (let i = 0; i < parts.length; i += 2) {
+    const sentence = parts[i]
+    const insideQuote = quotes % 2 === 1
+    quotes += (sentence.match(/"/g) || []).length
+    if (!insideQuote && /^Activate only\b/.test(sentence)) continue
+    out += (out && i > 0 ? parts[i - 1] : '') + sentence
+  }
+  return out
 }
 
 // Where a card left from, said only when it was not the battlefield. "Is exiled"
