@@ -889,7 +889,7 @@ class LogParser {
         const seat = this.objectController.get(id) ?? annotation.affectorId
         const source = this.sourceOf(annotation.affectorId)
         this.push('token',
-          `${this.seatLabel(seat)} creates a ${token || 'token'}${source ? ` (${source})` : ''}`,
+          `${this.seatLabel(seat)} creates ${withArticle(token || 'token')}${source ? ` (${source})` : ''}`,
           { seat, card: token, source })
       }
     }
@@ -1300,6 +1300,7 @@ class LogParser {
       events = collapseRuns(events, 'damage', damageDescriber, sameTarget)
       events = collapseRuns(events, 'counter', counterDescriber, sameCounter)
       events = collapseRuns(events, 'select', selectDescriber)
+      events = collapseRuns(events, 'token', tokenDescriber, sameToken)
       events = mergeScryDraw(events)
       events = mergeSharedSource(events)
 
@@ -1465,6 +1466,31 @@ function collapseRuns(events, kind, describe, sameGroup = (a, b) => a.seat === b
 // four from another.
 function sameActor(a, b) {
   return a.seat === b.seat && (a.source || null) === (b.source || null)
+}
+
+// "a Map", "an Illusion". Only the first letter is consulted, which is right for every
+// token name seen so far; "Unicorn"-style exceptions would need a word list.
+function withArticle(name) {
+  return `${/^[AEIOU]/i.test(name) ? 'an' : 'a'} ${name}`
+}
+
+// Several identical tokens from one source at once: Get Lost's two Maps, Elspeth's
+// doubled Soldiers. Grouped on player, source *and* token name, so different tokens
+// never fold together.
+function sameToken(a, b) {
+  return sameActor(a, b) && (a.card || null) === (b.card || null)
+}
+
+// "creates 2 Map tokens", not "creates a Map and creates a Map". The count is put
+// before "<name> tokens" rather than pluralising the name itself, which would go
+// wrong on irregular plurals (Wolf, Elf).
+function tokenDescriber(run) {
+  const { who } = splitOn(run[0].text, ' creates ')
+  const name = run[0].card || 'token'
+  return {
+    ...run[0],
+    text: `${who} creates ${run.length} ${name} tokens${run[0].source ? ` (${run[0].source})` : ''}`,
+  }
 }
 
 function runDescriber(verb) {
@@ -1901,11 +1927,16 @@ function mergeSharedSource(events) {
     // once. This also folds "sacrifices X and sacrifices Y" into "sacrifices X and Y".
     const first = strip(previous.text)
     const second = strip(event.text)
-    const opening = sharedOpening(first, second, cards)
+    // Against the *last* clause, not the whole sentence: after a first merge the
+    // sentence opens with whatever began it, so "X is destroyed and Lawgikill
+    // sacrifices Y" never shared an opening with "Lawgikill draws Z" and the player
+    // was named twice.
+    const opening = sharedOpening(previous.lastClause || first, second, cards)
 
     out[out.length - 1] = {
       ...previous,
       text: `${first} and ${second.slice(opening.length)}${suffix}`,
+      lastClause: second,
       card: null,
       cards,
       origins,
