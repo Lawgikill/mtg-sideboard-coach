@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.0 — 2026-10-22
+
+The first update delivered through the app's own updater. Every change is in the Replay narration.
+
+### New in the narration
+
+- **Your chosen modes and optional costs** appear on the cast line: `casts and resolves Pawpatch Recruit with offspring`, `casts Bushwhack, choosing "Search your library for a basic land card…"`. These are only ever recorded for your own spells.
+- **Your activated abilities name their targets**, as spells already did: `activates Lavaspur Boots: Equip {1}, targeting Plains`. That matters most when the effect never happens, such as an equip whose target was killed in response.
+- **Attackers show their size** when they attack: `Keen-Eyed Curator (8/7) attacks Rish`, with counters, equipment and other bonuses already included.
+- **Counterspells are credited**: `Leatherhead, Swamp Stalker is countered (Three Steps Ahead)`.
+- **Token copies say so, with their real size**: `creates a 1/1 token copy of Pawpatch Recruit`. Hovering it shows the actual token card, not the 2/1 card it copies.
+
+### Clearer lines
+
+- Identical tokens are counted (`creates 2 Map tokens (Get Lost)`), and every token line says "token".
+- Activation lines drop restrictions like "Activate only as a sorcery". The ability was already used, so they say nothing.
+- Lines that combine three related events no longer repeat the player's name.
+- Same-named tokens of different sizes (the various Soldier tokens) now preview the right one.
+
+### Fixes
+
+- `creates a Illusion` now reads `creates an Illusion token`.
+
 ## 1.0.0 — 2026-10-22
 
 First release. Version numbers before this (up to 3.2.0) were pre-release builds and are not part of this sequence.

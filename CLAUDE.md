@@ -196,6 +196,8 @@ This matters because **the updater is the one part that cannot fix itself**: a r
 3. Commit, tag `v<x.y.z>` (annotated), push `main` and the tag.
 4. `gh release create v<x.y.z> release/mtg-sideboard-coach-setup-<x.y.z>.exe release/mtg-sideboard-coach-setup-<x.y.z>.exe.blockmap release/latest.yml --title "MTG Sideboard Coach <x.y.z>" --notes-file <notes>`.
 
+**Never run `npx @electron/asar extract-file … package.json` from the project root.** It writes the packaged, trimmed `package.json` into the current directory, silently replacing the project's own and dropping its scripts, build config and dev dependencies. That happened once while checking the 1.1.0 build and was caught by `git diff` before committing. Use `asar list` to inspect, or extract into a scratch folder.
+
 All three files must come from **the same build**: `latest.yml` carries the installer's sha512, and a mismatch makes every client reject the download. Never publish a draft or prerelease expecting clients to see it — the updater ignores both.
 
 ## Removed: the Scout tab
