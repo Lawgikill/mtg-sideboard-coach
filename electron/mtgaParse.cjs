@@ -164,9 +164,13 @@ class LogParser {
     // (1, 2, 3 alternating between players); the narration counts each player's own
     // turns instead, so both players show a Turn 1, a Turn 2 and so on.
     this.seatTurns = new Map()
+    // ability instance -> its chosen targets, already resolved to names, waiting for
+    // the activation line. Cleared every turn so a stale entry cannot be picked up by
+    // a later ability that happens to reuse the id.
+    this.abilityTargets = new Map()
   }
 
-  // Records what a spell was pointed at, onto the cast event already pushed for it.
+  // Records what a spell or an activated ability was pointed at.
   //
   // Names are resolved *now*, not later: instance ids are renumbered and reused
   // within a game, so reading them at the end of the parse attributed Meltstrider's
@@ -176,6 +180,9 @@ class LogParser {
   recordTargets(sourceId, targetIds) {
     if (!this.game) return
 
+    const labels = targetIds.map((id) => this.targetLabel(id)).filter(Boolean)
+    const cards = targetIds.map((id) => this.nameOf(id)).filter(Boolean)
+
     for (let i = this.game.events.length - 1; i >= 0; i -= 1) {
       const event = this.game.events[i]
       if (event.kind === 'turn') break
@@ -183,17 +190,23 @@ class LogParser {
 
       // A later request supersedes an earlier one, so changing a target before
       // confirming leaves only the final choice.
-      event.targetLabels = targetIds.map((id) => this.targetLabel(id)).filter(Boolean)
-      event.targetCards = targetIds.map((id) => this.nameOf(id)).filter(Boolean)
+      event.targetLabels = labels
+      event.targetCards = cards
       return
     }
+
+    // No cast to patch: an activated ability, whose targets are chosen *before* its
+    // line exists — the activation line is written on the commitment, which comes
+    // after. Held, already named, until then. Superseded the same way.
+    this.abilityTargets.set(sourceId, { labels, cards })
   }
 
-  // Renders the recorded targets onto the cast line, before collapseCastResolve
-  // rewrites that text.
+  // Renders the recorded targets onto the cast or activation line, before
+  // collapseCastResolve rewrites the cast text.
   attachTargets(events) {
     return events.map((event) => {
-      if (event.kind !== 'cast' || !event.targetLabels || event.targetLabels.length === 0) return event
+      if (event.kind !== 'cast' && event.kind !== 'activate') return event
+      if (!event.targetLabels || event.targetLabels.length === 0) return event
       return {
         ...event,
         text: `${event.text}, targeting ${joinList(countedList(event.targetLabels))}`,
@@ -691,6 +704,7 @@ class LogParser {
     this.turn = turnInfo.turnNumber
     this.turnDrawSeen = false
     this.castingOpen = false
+    this.abilityTargets = new Map()
     if (this.turn === 1) this.reportOpeningHands()
 
     const taken = (this.seatTurns.get(this.activeSeat) || 0) + 1
@@ -889,12 +903,18 @@ class LogParser {
         // commitment is the *last* step of activating, so appending put the costs
         // above the line that explains them.
         const at = this.abilityOpenedAt.get(abilityId) ?? this.game.events.length
+        // Only our own activations have targets here: the request goes to the player
+        // choosing, exactly as with spells, so the opponent's stay unknown.
+        const aimed = this.abilityTargets.get(abilityId)
+        this.abilityTargets.delete(abilityId)
         this.game.events.splice(at, 0, {
           turn: this.turn,
           kind: 'activate',
           text: `${this.seatLabel(annotation.affectorId)} activates ${source}${effect ? `: ${effect}` : ''}`,
           seat: annotation.affectorId,
           card: source,
+          targetLabels: aimed ? aimed.labels : undefined,
+          targetCards: aimed ? aimed.cards : undefined,
         })
       }
     }
