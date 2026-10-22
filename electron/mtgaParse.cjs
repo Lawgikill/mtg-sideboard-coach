@@ -29,6 +29,17 @@ const ZONE_ALIASES = {
 // MTGA writes mana symbols as {oT}/{o1} and uses CARDNAME as a placeholder. Only the
 // effect is kept — everything before the first colon is the cost, which the
 // narration already shows as the sacrifice or tap that paid it.
+// Ability text as stored by MTGA, made readable: mana symbols, the card's own name,
+// and no trailing period. Used for modes, which are shown whole.
+function cleanAbilityText(text, cardName) {
+  if (!text) return null
+  return text
+    .replace(/\{o([^}]+)\}/g, '{$1}')
+    .replace(/CARDNAME/g, cardName || 'this card')
+    .trim()
+    .replace(/\.$/, '') || null
+}
+
 function abilityEffect(text, cardName) {
   if (!text) return null
   const cleaned = text
@@ -201,6 +212,9 @@ class LogParser {
     // the activation line. Cleared every turn so a stale entry cannot be picked up by
     // a later ability that happens to reuse the id.
     this.abilityTargets = new Map()
+    // Casting-time answers from findCastingChoices, consumed in request order.
+    this.castingChoices = []
+    this.castingRequestIndex = 0
   }
 
   // Records what a spell or an activated ability was pointed at.
@@ -234,15 +248,53 @@ class LogParser {
     this.abilityTargets.set(sourceId, { labels, cards })
   }
 
+  // A casting-time answer, onto the cast line it belongs to. Patched like targets, and
+  // for the same reason resolved to text now rather than later. The cast must be the
+  // same instance *and* the same card: a reply to an attempt that was then cancelled
+  // has no cast line of its own, and must not land on whatever reused the id.
+  recordCastingChoice(request, choice) {
+    if (!this.game) return
+    const option = (request.castingTimeOptionReq || []).find((entry) => entry.ctoId === choice.ctoId)
+    if (!option) return
+
+    const spellId = option.affectedId
+    const spell = this.nameOf(spellId)
+    const cast = [...this.game.events].reverse().find((event, index, all) =>
+      event.kind === 'cast' && event.instanceId === spellId && event.card === spell
+      && !all.slice(0, index).some((later) => later.kind === 'turn'))
+    if (!cast) return
+
+    if (choice.type === 'CastingTimeOptionType_AdditionalCost') {
+      // "Offspring {o2}" -> "offspring"; the same for kicker, bargain, gift.
+      const text = this.resolveAbilityText(option.grpId) || ''
+      const keyword = text.match(/^([A-Za-z][A-Za-z' ]*?)(?=\s*(\{|\(|—|$))/)
+      cast.paidCost = keyword ? keyword[1].toLowerCase() : 'an additional cost'
+    }
+
+    if (choice.type === 'CastingTimeOptionType_Modal' && choice.modes.length > 0) {
+      cast.modes = choice.modes
+        .map((grpId) => cleanAbilityText(this.resolveAbilityText(grpId), spell))
+        .filter(Boolean)
+    }
+  }
+
   // Renders the recorded targets onto the cast or activation line, before
   // collapseCastResolve rewrites the cast text.
   attachTargets(events) {
     return events.map((event) => {
       if (event.kind !== 'cast' && event.kind !== 'activate') return event
-      if (!event.targetLabels || event.targetLabels.length === 0) return event
+      const targets = event.targetLabels && event.targetLabels.length > 0
+      if (!targets && !event.paidCost && !(event.modes && event.modes.length)) return event
+
+      // Cost, then mode, then targets: the mode says what the targets are for.
+      const cost = event.paidCost ? ` with ${event.paidCost}` : ''
+      const modes = event.modes && event.modes.length
+        ? `, choosing ${joinList(event.modes.map((mode) => `"${mode}"`))}`
+        : ''
+      if (!targets) return { ...event, text: `${event.text}${cost}${modes}` }
       return {
         ...event,
-        text: `${event.text}, targeting ${joinList(countedList(event.targetLabels))}`,
+        text: `${event.text}${cost}${modes}, targeting ${joinList(countedList(event.targetLabels))}`,
         // Target names stay hoverable alongside the spell's own name.
         cards: [...(event.cards || []), ...(event.targetCards || [])],
       }
@@ -417,6 +469,14 @@ class LogParser {
     // chosen, the only thing left to do with it is take it back. Later requests for
     // the same source supersede earlier ones, so changing a target before confirming
     // leaves the final choice.
+    if (message.castingTimeOptionsReq) {
+      const entry = this.castingChoices[this.castingRequestIndex]
+      this.castingRequestIndex += 1
+      if (entry && entry.choice && entry.msgId === message.msgId && entry.gameStateId === message.gameStateId) {
+        this.recordCastingChoice(message.castingTimeOptionsReq, entry.choice)
+      }
+    }
+
     if (message.selectTargetsReq && message.selectTargetsReq.sourceId != null) {
       const request = message.selectTargetsReq
       const chosen = []
@@ -2056,8 +2116,69 @@ function relocateTurnEnd(events) {
 // the single-line `greToClientEvent` stream, so a line-by-line parse cannot see it at
 // all. Brace matching over the whole text is both simpler and the only thing that
 // works; these blocks are a handful per log.
-function findSideboarding(logPath, resolveName) {
-  const text = fs.readFileSync(logPath, 'utf8')
+// Your answers to MTGA's casting-time questions: which mode of a modal spell, and
+// whether to pay an optional additional cost such as offspring or kicker. MTGA sends
+// a `castingTimeOptionsReq` (single-line, so the main parse sees it) and the client
+// answers with a `castingTimeOptionsResp`, a pretty-printed client-to-GRE block the
+// main parse cannot see — the same situation as the sideboard submission.
+//
+// Returned as one entry per request, **in file order**, each carrying the request's
+// own msgId and gameStateId. The main parse walks requests in the same order and
+// checks both ids before using an entry, so a misalignment can only drop a choice,
+// never attach one to the wrong spell. A reply is paired with the first reply after
+// its request, and only if it comes before the next request.
+//
+// Only the player choosing is asked, so the opponent's choices are never here.
+function findCastingChoices(text) {
+  const requests = []
+  const requestKey = /"castingTimeOptionsReq":\s*\{/g
+  let hit
+  while ((hit = requestKey.exec(text)) !== null) {
+    // The message's own ids precede its payload inside the same message object. The
+    // greedy prefix takes the *last* id before the payload: a line can pack several
+    // messages, and the first id in the window may belong to an earlier one.
+    const head = text.slice(Math.max(0, hit.index - 400), hit.index)
+    const msgId = head.match(/[^]*"msgId":\s*(\d+)/)
+    const gameStateId = head.match(/[^]*"gameStateId":\s*(\d+)/)
+    requests.push({
+      at: hit.index,
+      msgId: msgId ? Number(msgId[1]) : null,
+      gameStateId: gameStateId ? Number(gameStateId[1]) : null,
+      choice: null,
+    })
+  }
+
+  const replyKey = /"castingTimeOptionsResp":\s*\{/g
+  while ((hit = replyKey.exec(text)) !== null) {
+    const respId = text.slice(Math.max(0, hit.index - 400), hit.index).match(/[^]*"respId":\s*(\d+)/)
+    if (!respId) continue
+    const owner = [...requests].reverse().find((request) => request.at < hit.index)
+    if (!owner || owner.choice || owner.msgId !== Number(respId[1])) continue
+
+    let depth = 0
+    const open = text.indexOf('{', hit.index)
+    for (let at = open; at < text.length; at += 1) {
+      if (text[at] === '{') depth += 1
+      else if (text[at] === '}' && --depth === 0) {
+        try {
+          const reply = JSON.parse(text.slice(open, at + 1)).castingTimeOptionResp || {}
+          owner.choice = {
+            ctoId: reply.ctoId,
+            type: reply.castingTimeOptionType,
+            modes: (reply.chooseModalResp && reply.chooseModalResp.grpIds) || [],
+          }
+        } catch {
+          // A reply that will not parse is a choice we simply do not report.
+        }
+        break
+      }
+    }
+  }
+
+  return requests
+}
+
+function findSideboarding(text, resolveName) {
   const steps = new Map()
 
   // Every `"key": {` in the file, as the object it introduces.
@@ -2236,7 +2357,11 @@ async function parseLogFile(logPath, options = {}) {
     options.resolveAbility, options.resolveAbilityText,
   )
   parser.cancelledCasts = await findCancelledCasts(logPath)
-  const sideboarding = findSideboarding(logPath, resolveName)
+  // Both of these need the multi-line client-to-GRE blocks the streaming parse cannot
+  // see, so the file is read whole once and shared.
+  const wholeText = fs.readFileSync(logPath, 'utf8')
+  const sideboarding = findSideboarding(wholeText, resolveName)
+  parser.castingChoices = findCastingChoices(wholeText)
 
   const rl = readline.createInterface({
     input: fs.createReadStream(logPath),
