@@ -5,6 +5,7 @@ const zlib = require('node:zlib')
 const { promisify } = require('node:util')
 const mtgaLogs = require('./mtgaLogs.cjs')
 const mtgaGames = require('./mtgaGames.cjs')
+const updates = require('./updates.cjs')
 
 const gunzip = promisify(zlib.gunzip)
 const fs = require('node:fs')
@@ -287,6 +288,9 @@ ipcMain.handle('open-journal-window', (_event, deckId) => {
   win.on('closed', () => journalWindows.delete(deckId))
 })
 
+// The main window, kept so a second launch can bring it forward.
+let mainWindow = null
+
 function createWindow() {
   const window = new BrowserWindow({
     title: 'MTG Sideboard Coach',
@@ -309,6 +313,10 @@ function createWindow() {
   })
 
   window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
+  mainWindow = window
+  window.on('closed', () => {
+    if (mainWindow === window) mainWindow = null
+  })
 }
 
 // Sweeps while the app is open. MTGA only rotates its log on launch, so archiving
@@ -339,7 +347,26 @@ ipcMain.handle('mtga-load-games', (_event, decks) => mtgaGames.loadGames(app, de
 ipcMain.handle('mtga-list-archives', () => mtgaLogs.listArchives(app))
 ipcMain.handle('mtga-prune-archives', (_event, days) => mtgaLogs.pruneArchives(app, days))
 
+// One running copy at a time. Every copy shares one userData folder, so two would
+// share one localStorage database: the second can fail to open it and start with no
+// decks at all. A running copy also holds the files an update has to replace. With
+// Start menu and desktop shortcuts, launching twice is easy, so a second launch just
+// brings the existing window forward.
+const isPrimaryInstance = app.requestSingleInstanceLock()
+if (!isPrimaryInstance) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  })
+}
+
 app.whenReady().then(() => {
+  if (!isPrimaryInstance) return
+
+  updates.setup()
   sweepMtgaLogs()
   setInterval(sweepMtgaLogs, MTGA_SWEEP_MS)
 

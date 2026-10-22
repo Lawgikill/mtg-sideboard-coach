@@ -8,7 +8,7 @@ Last updated: June 23, 2026. Version references corrected for the 1.0.0 release 
 
 MTG Sideboard Coach is a personal Magic: The Gathering desktop app focused on Standard deck sideboarding. It is not a collection manager or tournament tracker. The core goal is to import decks, view main/sideboard cards with card art, define matchup-specific sideboard plans, and keep those plans easy to scan during play or testing.
 
-The app currently targets Windows through Electron, with a portable `.exe` build.
+The app currently targets Windows through Electron. It shipped as a portable `.exe` when this was written and is now an installer that updates itself (see CLAUDE.md, *Installer and self-update*).
 
 ## Current Tech Stack
 
@@ -16,7 +16,7 @@ The app currently targets Windows through Electron, with a portable `.exe` build
 - TypeScript
 - Vite
 - Electron
-- electron-builder for portable Windows packaging
+- electron-builder for Windows packaging (now an NSIS installer; originally portable)
 - `@dnd-kit/core` for dragging cards into plans
 - `lucide-react` for UI icons
 - `mana-font` for Magic mana symbols
@@ -35,7 +35,7 @@ The app currently targets Windows through Electron, with a portable `.exe` build
 - `electron/preload.cjs`: contextBridge that exposes `window.electronAPI` to the renderer.
 - `electron/launch.cjs`: local desktop launcher.
 - `data/standard-cards-scryfall.json`: removed at the 1.0.0 release. It was an old manual export that nothing read; the `Cards JSON` button produces a fresh one on demand.
-- `package.json`: scripts and Windows portable packaging config.
+- `package.json`: scripts and Windows packaging config (installer + GitHub update source).
 
 ## Data Storage
 
@@ -248,25 +248,11 @@ Sideboard size validation:
   - `main post-board sideboard - situational In + situational Out`
 - This reflects the intended workflow: the main plan is the base plan, and situational blocks are optional additions to that plan.
 
-## Windows Portable Build
+## Windows Build
 
-Packaging uses `electron-builder`.
+**Superseded.** The portable build described here was replaced at 1.0.0 by an installer that updates itself from GitHub Releases. `npm run package:win` now produces `release/mtg-sideboard-coach-setup-<version>.exe`. See CLAUDE.md, *Installer and self-update*, for how it works and how to release.
 
-Command:
-
-```powershell
-npm run package:win
-```
-
-Expected output:
-
-```text
-release/MTG Sideboard Coach v<version> portable.exe
-```
-
-The version comes from `package.json` (`v1.0.0` for the first release). Builds named above v1.0.0 in `release/`, such as v3.2.0, are from before the version reset and are older.
-
-For a friend, the portable exe should be the only file they need to launch the app. They may still need to click through Windows SmartScreen because the app is unsigned. Their saved decks/card sync will be local to their Windows user profile/app data.
+Old portable builds left in `release/` (such as v3.2.0) are from before the version reset and are older than v1.0.0.
 
 ## Development Checklist
 

@@ -1,8 +1,15 @@
 # Changelog
 
-## 1.0.0 — 2026-10-21
+## 1.0.0 — 2026-10-22
 
 First release. Version numbers before this (up to 3.2.0) were pre-release builds and are not part of this sequence.
+
+### Installing and updating
+
+- Windows installer: per-user, no admin prompt, with Start menu and desktop shortcuts. Uninstalling keeps all your data.
+- Automatic updates from GitHub Releases: checks shortly after launch and every few hours, downloads in the background, then offers **Restart to update**. Ignore it and the update installs the next time you close the app.
+- The home screen shows the installed version with a **Check for updates** button.
+- Only one copy of the app runs at a time; launching it again brings the open window forward.
 
 ### Decks
 
@@ -40,6 +47,7 @@ First release. Version numbers before this (up to 3.2.0) were pre-release builds
 
 ### Known limitations
 
+- The installer is unsigned, so a first install downloaded through a browser shows a Windows SmartScreen prompt (*More info → Run anyway*). Updates after that install without it.
 - Replay reads archived logs, so it works after a match, not during one.
 - The opponent's hand, targets, searches and sideboard submission are never sent to your client, so those stay hidden or are inferred.
 - MTGA sometimes leaves events out of its log entirely, for example a cost payment. The narration does not invent what isn't there.

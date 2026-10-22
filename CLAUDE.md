@@ -5,7 +5,7 @@ A personal Magic: The Gathering sideboard planning tool for Standard-legal decks
 ## Tech Stack
 
 - **React 19 + TypeScript** via Vite
-- **Electron** for the Windows desktop build (portable `.exe`)
+- **Electron** for the Windows desktop build — a per-user NSIS installer that updates itself from GitHub Releases via **electron-updater**
 - **@dnd-kit** for drag-and-drop
 - **lucide-react** for icons, **mana-font** for MTG mana symbols
 - Data persisted in `localStorage`; Electron also writes hourly backup files to disk
@@ -15,7 +15,7 @@ A personal Magic: The Gathering sideboard planning tool for Standard-legal decks
 ```bash
 npm run dev          # Start Vite dev server
 npm run desktop      # Build + launch Electron app locally
-npm run package:win  # Build + package Windows portable .exe → release/
+npm run package:win  # Build the Windows installer → release/ (never publishes)
 npm run lint         # ESLint
 ```
 
@@ -23,7 +23,9 @@ npm run lint         # ESLint
 
 **1.0.0 is the first release.** The version was reset from 3.2.0 on 2026-10-21, so any other version number that turns up — old portable builds in `release/` (`v3.1.0`, `v3.2.0`), the `v1.5.0` in an old handoff note — comes from **before** the reset and is not part of this sequence. Those are all older than `v1.0.0` despite being numerically higher. Release notes start at 1.0.0 in `CHANGELOG.md`.
 
-`package.json` is the only source of the version; nothing in the app reads it. Its one consumer is `scripts/package-win.ps1`, which names the portable exe `MTG Sideboard Coach v<version> portable.exe`. Bump with `npm version <x.y.z> --no-git-tag-version` so `package-lock.json` follows — before the reset the lockfile had drifted to `2.12.0` while `package.json` said `3.2.0`, because only one of them was being edited by hand. Do not search-and-replace version strings in the lockfile: unrelated dependencies (`boolean`, `escalade`) are themselves at `3.2.0`.
+**The `v1.0.0` tag was moved once, deliberately.** It was first pushed at `23a0c27`, before the installer existed, then re-pointed forward to the commit that added the installer and self-update, so that 1.0.0 is the first version anyone can install. That was the owner's explicit choice after the history implications were raised. Only the tag moved: no commits were rewritten, and `main` simply gained a commit. Never move a release tag once a Release with an installer has been published for it — installed copies compare against those versions.
+
+`package.json` is the only source of the version. The app reads it at runtime through `app.getVersion()` (the home screen shows it, and the updater compares against it), and electron-builder uses it to name the installer `mtg-sideboard-coach-setup-<version>.exe` and to write `latest.yml`. Bump with `npm version <x.y.z> --no-git-tag-version` so `package-lock.json` follows — before the reset the lockfile had drifted to `2.12.0` while `package.json` said `3.2.0`, because only one of them was being edited by hand. Do not search-and-replace version strings in the lockfile: unrelated dependencies (`boolean`, `escalade`) are themselves at `3.2.0`.
 
 ## Source Files
 
@@ -44,6 +46,8 @@ npm run lint         # ESLint
 | `src/zip.ts` | Dependency-free ZIP writer (stored, not deflated) for the bulk replay export |
 | `electron/main.cjs` | Electron main process |
 | `electron/preload.cjs` | Exposes `electronAPI` to the renderer via contextBridge |
+| `electron/updates.cjs` | Self-update from GitHub Releases via electron-updater; status to the renderer over IPC |
+| `electron/launch.cjs` | `npm run desktop` launcher; strips `ELECTRON_RUN_AS_NODE` before starting Electron |
 | `electron/mtgaLogs.cjs` | Archives MTGA `Player.log` / `Player-prev.log`, prunes old copies |
 | `electron/mtgaParse.cjs` | Parses an archived log into narratable games (events, turns, results) |
 | `electron/mtgaGames.cjs` | grpId→card name from MTGA's SQLite DB; groups games into matches, attaches deck |
@@ -140,6 +144,58 @@ Each deck has a **Journal** tab (alongside Plans) for logging match results:
 - **Backups**: Electron only — `electronAPI.saveDecksBackup` is called on every deck save; hourly dedup logic lives in the main process.
 - **Native dialog focus (Electron quirk)**: after a native `confirm()`/`alert()` closes, Chromium can leave the renderer without keyboard focus — the window looks focused and the mouse works, but nothing typed reaches the page until a focus change jolts it loose. **Never call `confirm()`/`alert()` directly**; use the `confirmAction()` / `alertMessage()` wrappers in `App.tsx`, which call `electronAPI.focusWindow()` afterwards (immediately, then at 50ms and 250ms, since the dialog tears down after `confirm()` returns). The main-process handler does `win.blur()` **then** `win.focus()` — `focus()` alone does not clear the stuck state; the blur is what makes it work, mirroring the click-away-and-back that fixes it manually.
 - **Restore backup**: on Electron, `restoreBackup` writes the restored decks straight to storage with `saveDecks` and then calls `electronAPI.reloadWindow()` rather than updating React state. Rebuilding the web contents both loads the restored data and reliably clears the stuck-focus state above. The web build falls back to a normal state update, clearing `selectedDeckId`/`selectedMatchupId` since a wholesale data swap makes any prior selection stale.
+
+## Installer and self-update
+
+The Windows build is an **NSIS installer**, not a portable exe, because only an installed app can update itself: a portable exe has no install location to replace. The two features come as a pair.
+
+### The installer
+
+- **Per-user, one-click** (`oneClick: true`, `perMachine: false`): installs to `%LOCALAPPDATA%\Programs\mtg-sideboard-coach` with no admin prompt, adds Start menu and desktop shortcuts and an Add/Remove Programs entry under HKCU. A per-machine install would ask for elevation on **every update**, which is the opposite of painless.
+- **Uninstalling never touches app data** (`deleteAppDataOnUninstall: false`). Verified: deck storage was byte-identical before and after an uninstall, with every backup and MTGA archive intact.
+- **Artifact names contain no spaces** (`mtg-sideboard-coach-setup-<version>.exe`). GitHub rewrites spaces in release asset names to dots, which would stop the filename in `latest.yml` matching the uploaded file and break every update.
+- **The app is unsigned.** A first install downloaded through a browser gets Windows SmartScreen (*More info → Run anyway*). electron-updater only verifies a publisher signature when a `publisherName` is baked in, which only happens when signing, so unsigned updates install without that check.
+
+### Data continuity: never change `name`
+
+Decks live in `localStorage` inside Electron's `userData` folder, `%APPDATA%\mtg-sideboard-coach`, which Electron derives from **`package.json` `name`** — not from where the app is installed. That is why the dev app, the old portable builds and the installed app all share one data folder, and why the installed app opened with every deck present (checked against the real install). `localStorage` is keyed by the `file://` origin, which every install path shares. **Renaming the package would silently give every user an empty app**; changing `appId` would install a second copy alongside the first. Treat both as fixed.
+
+### How updates work
+
+- **The source is a GitHub Release, never a commit.** electron-builder bakes `app-update.yml` (provider `github`, `Lawgikill/mtg-sideboard-coach`) into the installed app; the updater finds the newest release and reads its `latest.yml`, which names the installer and its sha512. Pushing code reaches nobody until a release is published with the built files attached.
+- `updates.cjs` checks **10 seconds after launch** (startup is busy enough without it) and **every 4 hours** (the app is often left open all session). A found update downloads in the background.
+- When it is downloaded, a green banner offers **Restart to update**, which calls `quitAndInstall(true, true)` — silent install, then relaunch. Ignoring it is safe: `autoInstallOnAppQuit` installs it on the next normal close, and the banner says so. The home screen shows the version with a manual **Check for updates**.
+- **Differential downloads need the previous release's `.blockmap`.** The updater downloads only changed blocks when it can find the installed version's blockmap; without it, it falls back to the full ~125MB download (seen in testing, where the test feed did not host the old blockmap). Always attach the blockmap to a release.
+- Dev runs report `unsupported` and never check: there is no installed copy to replace, and electron-updater would throw looking for `app-update.yml`.
+
+### One running copy
+
+`main.cjs` takes `requestSingleInstanceLock()`; a second launch focuses the existing window and exits. Every copy shares one `userData` folder, so two would share one `localStorage` database — the second can fail to open it and start with no decks — and a running copy holds files an update must replace. With shortcuts in two places, launching twice is easy. A consequence for development: **`npm run desktop` exits immediately while the installed app is open**, focusing it instead.
+
+### `ELECTRON_RUN_AS_NODE` in tool shells
+
+Some terminals — VS Code's integrated tooling, and Claude Code's shell — set `ELECTRON_RUN_AS_NODE=1`, which makes **any** Electron exe start as plain Node and exit: the installed app reports `bad option: --enable-logging`, or silently does nothing. `launch.cjs` strips it, which is why `npm run desktop` works. When launching the installed exe from such a shell, remove it first (`Remove-Item Env:ELECTRON_RUN_AS_NODE`). Shortcuts are never affected.
+
+### Testing an update without publishing
+
+`MTG_COACH_UPDATE_FEED` points the updater at any URL serving a `latest.yml` (generic provider) instead of GitHub. The full cycle was proven this way before the first release went public:
+
+1. Build a higher version into a scratch folder without touching `package.json`: `npx electron-builder --win nsis --x64 --publish never -c.extraMetadata.version=1.0.1 "-c.directories.output=<folder>"`.
+2. Serve it: `python -m http.server 8731 --bind 127.0.0.1 -d <folder>`.
+3. Install the real build (`<installer> /S`), then launch the installed exe with `MTG_COACH_UPDATE_FEED=http://127.0.0.1:8731/` set (and `ELECTRON_RUN_AS_NODE` removed).
+4. The server log shows `latest.yml`, the blockmaps and the installer being fetched; the banner appears; Restart relaunches into the new version (Add/Remove Programs and the exe's file version both read it).
+5. Clean up: uninstall (`Uninstall MTG Sideboard Coach.exe /S`), delete `%LOCALAPPDATA%\mtg-sideboard-coach-updater` (the downloaded installer is cached there), reinstall the real build.
+
+This matters because **the updater is the one part that cannot fix itself**: a release with a broken update path can never deliver its own repair — everyone on it would have to reinstall by hand. Test any change to `updates.cjs` or the packaging config this way before releasing.
+
+### Releasing
+
+1. `npm version <x.y.z> --no-git-tag-version`, and add a `CHANGELOG.md` entry.
+2. `npm run package:win` — produces the installer, its `.blockmap` and `latest.yml` in `release/`.
+3. Commit, tag `v<x.y.z>` (annotated), push `main` and the tag.
+4. `gh release create v<x.y.z> release/mtg-sideboard-coach-setup-<x.y.z>.exe release/mtg-sideboard-coach-setup-<x.y.z>.exe.blockmap release/latest.yml --title "MTG Sideboard Coach <x.y.z>" --notes-file <notes>`.
+
+All three files must come from **the same build**: `latest.yml` carries the installer's sha512, and a mismatch makes every client reject the download. Never publish a draft or prerelease expecting clients to see it — the updater ignores both.
 
 ## Removed: the Scout tab
 
@@ -431,4 +487,8 @@ window.electronAPI?.saveDecksBackup(json)
 window.electronAPI?.listBackups()          // → { filename, modifiedAt }[]
 window.electronAPI?.loadBackup(filename)   // → JSON string | null
 window.electronAPI?.clearOldBackups(days)  // → number deleted
+window.electronAPI?.getUpdateStatus()      // → UpdateStatus (state + currentVersion)
+window.electronAPI?.checkForUpdates()      // → UpdateStatus after starting a check
+window.electronAPI?.installUpdate()        // → true if a downloaded update is now installing
+window.electronAPI?.onUpdateStatus(cb)     // → unsubscribe fn
 ```

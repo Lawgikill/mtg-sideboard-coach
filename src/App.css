@@ -2658,3 +2658,52 @@ button:disabled {
   color: #8fcfa6;
   flex-basis: 100%;
 }
+
+/* Self-update: the banner once a new version has downloaded, and the version with a
+   manual check on the home screen. Green, like the other "this is good news" states. */
+.update-banner {
+  align-items: center;
+  background: #16261d;
+  border: 1px solid #2b4a35;
+  border-radius: 8px;
+  color: #c8e6d2;
+  display: flex;
+  flex-shrink: 0;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 8px 10px 8px 14px;
+}
+
+.update-banner > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.update-banner-note {
+  color: #8fb39c;
+  font-size: 13px;
+}
+
+.update-indicator {
+  align-items: center;
+  display: inline-flex;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.update-version {
+  color: #8b97a3;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-message {
+  color: #9fd9b4;
+}
+
+/* A compact secondary button for the status row, which is one line of small text. */
+.secondary-button.tiny {
+  font-size: 12px;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 9px;
+}

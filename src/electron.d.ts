@@ -47,8 +47,22 @@ type MtgaMatch = {
   games: MtgaGame[]
 }
 
+// Where the self-updater is, as reported by the main process. `unsupported` is a dev
+// run: there is no installed copy to replace.
+type UpdateStatus = {
+  state: 'idle' | 'unsupported' | 'checking' | 'current' | 'downloading' | 'ready' | 'error'
+  currentVersion: string
+  version?: string
+  percent?: number
+  message?: string
+}
+
 interface Window {
   electronAPI?: {
+    getUpdateStatus: () => Promise<UpdateStatus>
+    checkForUpdates: () => Promise<UpdateStatus>
+    installUpdate: () => Promise<boolean>
+    onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void
     focusWindow: () => Promise<void>
     mtgaLoadGames: (decks: unknown) => Promise<MtgaMatch[]>
     mtgaArchiveNow: () => Promise<{ copied: Array<{ file: string; bytes: number }>; unchanged: string[]; failed: Array<{ file: string; reason: string }> }>

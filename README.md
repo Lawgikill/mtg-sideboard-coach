@@ -19,7 +19,15 @@ npm run package:win
 - `npm run desktop`: builds the web app and opens it in Electron.
 - `npm run build`: TypeScript + Vite production build.
 - `npm run lint`: ESLint check.
-- `npm run package:win`: builds a portable Windows executable in `release/`, named `MTG Sideboard Coach v<version> portable.exe`.
+- `npm run package:win`: builds the Windows installer in `release/` (`mtg-sideboard-coach-setup-<version>.exe`, plus the `.blockmap` and `latest.yml` the updater needs). It never publishes; see the release steps in CLAUDE.md.
+
+## Installing
+
+Download `mtg-sideboard-coach-setup-<version>.exe` from the [Releases page](https://github.com/Lawgikill/mtg-sideboard-coach/releases/latest) and run it. It installs for your Windows user only, with no admin prompt.
+
+The installer is unsigned, so Windows SmartScreen may say it "protected your PC". Click **More info → Run anyway**.
+
+After that, the app updates itself. When a new version has downloaded, a banner offers **Restart to update**. If you ignore it, the update installs the next time you close the app.
 
 ## What It Does
 
@@ -45,7 +53,7 @@ Each deck has three tabs:
 - Card art is lazy-loaded from Scryfall URLs.
 - A fresh Scryfall sync is needed when new Standard sets release.
 - Dual-faced card previews depend on synced Scryfall `card_faces` image data.
-- The packaged app is portable, but each computer keeps its own local app data.
+- Each computer keeps its own app data in `%APPDATA%\mtg-sideboard-coach`. Uninstalling or updating never touches it.
 - Replay reads MTGA's `Player.log` and its local card database. MTGA must be installed, with **Detailed Logs (Plugin Support)** turned on in MTGA's account settings, or game events are not written to the log at all.
 
 ## Documentation

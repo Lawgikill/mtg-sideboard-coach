@@ -33,6 +33,7 @@ import {
   Plus,
   Sparkles,
   Printer,
+  RefreshCw,
   RotateCcw,
   Search,
   Trash2,
@@ -162,6 +163,7 @@ function JournalWindow({ deckId }: { deckId: string }) {
 }
 
 function MainApp() {
+  const update = useUpdateStatus()
   const [cardDatabase, setCardDatabase] = useState<CardDatabase>(() => loadCardDatabase())
   const [decks, setDecks] = useState<Deck[]>(() => syncGlobalMatchups(normalizeDeckColors(loadDecks(), cardDatabase.cards)))
   const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null)
@@ -432,6 +434,7 @@ function MainApp() {
 
   return (
     <main className="app-shell">
+      <UpdateBanner status={update} />
       {!selectedDeck ? (
         <DeckLibrary
           cardById={indexes.byId}
@@ -452,6 +455,7 @@ function MainApp() {
           onExportCards={exportStandardJson}
           onImportDeck={openImportModal}
           onOpenBackups={window.electronAPI ? openBackupsModal : undefined}
+          update={update}
           onSelectDeck={setSelectedDeckId}
           onSyncCards={syncCards}
           sourceUpdatedAt={cardDatabase.sourceUpdatedAt}
@@ -610,6 +614,7 @@ type DeckLibraryProps = {
   onExportCards: () => void
   onImportDeck: () => void
   onOpenBackups?: () => void
+  update?: UpdateStatus | null
   onSelectDeck: (id: string) => void
   onSyncCards: () => void
   sourceUpdatedAt?: string
@@ -651,6 +656,7 @@ function DeckLibrary(props: DeckLibraryProps) {
         <span>{props.cardsCount.toLocaleString()} Standard cards</span>
         <span>{props.sourceUpdatedAt ? `Scryfall ${formatDate(props.sourceUpdatedAt)}` : 'No Scryfall sync yet'}</span>
         {props.syncError ? <span className="error-text">{props.syncError}</span> : null}
+        <UpdateIndicator status={props.update ?? null} />
       </section>
 
       {props.syncProgress ? <SyncProgressBar progress={props.syncProgress} state={props.syncState} /> : null}
@@ -2430,6 +2436,96 @@ function useScreenshotOcr(
 
 // A clipboard write gives no visible sign it worked. Every copy action in the app
 // confirms briefly, and sharing one hook keeps that timing identical everywhere.
+// The self-updater's state, live. Null in the web build, which has no updater.
+function useUpdateStatus(): UpdateStatus | null {
+  const [status, setStatus] = useState<UpdateStatus | null>(null)
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.getUpdateStatus) return
+    let cancelled = false
+    api.getUpdateStatus().then((initial) => { if (!cancelled) setStatus(initial) })
+    const unsubscribe = api.onUpdateStatus((next) => setStatus(next))
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [])
+
+  return status
+}
+
+// Shown once an update has finished downloading, on every screen of the main window.
+// Restarting is a choice, never forced: an update left alone installs itself the next
+// time the app is closed normally, which the banner says so ignoring it is safe.
+function UpdateBanner({ status }: { status: UpdateStatus | null }) {
+  const [dismissed, setDismissed] = useState<string | null>(null)
+  if (!status || status.state !== 'ready' || dismissed === status.version) return null
+
+  return (
+    <div className="update-banner" role="status">
+      <RefreshCw size={16} />
+      <span>
+        <strong>Version {status.version}</strong> is ready to install.
+        {' '}<span className="update-banner-note">If you don't restart now, it installs the next time you close the app.</span>
+      </span>
+      <button className="primary-button" type="button" onClick={() => window.electronAPI?.installUpdate()}>
+        Restart to update
+      </button>
+      <button className="icon-button" type="button" title="Later" onClick={() => setDismissed(status.version ?? '')}>
+        <X size={16} />
+      </button>
+    </div>
+  )
+}
+
+// The version on the home screen, with a manual check beside it. The automatic check
+// runs anyway; this is for not wanting to wait for it.
+function UpdateIndicator({ status }: { status: UpdateStatus | null }) {
+  if (!status) return null
+  const version = <span className="update-version">v{status.currentVersion}</span>
+
+  // A dev run has nothing to update, so it shows the version alone.
+  if (status.state === 'unsupported') return version
+
+  const busy = status.state === 'checking' || status.state === 'downloading'
+  const message = {
+    idle: '',
+    unsupported: '',
+    checking: 'Checking for updates\u2026',
+    current: 'Up to date',
+    downloading: `Downloading v${status.version}\u2026 ${status.percent ?? 0}%`,
+    ready: `v${status.version} ready \u2014 restart to update`,
+    error: "Couldn't check for updates",
+  }[status.state]
+
+  return (
+    <span className="update-indicator">
+      {version}
+      {message ? (
+        <span className={status.state === 'error' ? 'error-text' : 'update-message'} title={status.message}>
+          {message}
+        </span>
+      ) : null}
+      {status.state === 'ready' ? (
+        <button className="secondary-button tiny" type="button" onClick={() => window.electronAPI?.installUpdate()}>
+          Restart
+        </button>
+      ) : (
+        <button
+          className="secondary-button tiny"
+          type="button"
+          disabled={busy}
+          onClick={() => window.electronAPI?.checkForUpdates()}
+        >
+          <RefreshCw size={13} />
+          Check for updates
+        </button>
+      )}
+    </span>
+  )
+}
+
 function useCopyFeedback(duration = 1600) {
   const [copied, setCopied] = useState(false)
 
