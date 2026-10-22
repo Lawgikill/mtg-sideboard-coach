@@ -34,6 +34,7 @@ const KIND_COLORS: Record<string, string> = {
   search: '#8f9bab',
   mana: '#6f7d8c',
   counts: '#7e8a95',
+  animate: '#d9b87a',
   unresolved: '#b58a8a',
 }
 

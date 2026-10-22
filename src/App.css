@@ -2271,7 +2271,8 @@ button:disabled {
    these explain a change rather than being one. */
 .replay-token,
 .replay-counter,
-.replay-attach {
+.replay-attach,
+.replay-animate {
   color: #d9b87a;
 }
 

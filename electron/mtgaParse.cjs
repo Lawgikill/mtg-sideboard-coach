@@ -170,6 +170,9 @@ class LogParser {
     this.objectStats = new Map()
     // Instances that are copies (`isCopy`), such as an offspring token.
     this.objectCopies = new Set()
+    // instanceId -> { creature, onBattlefield } as last reported, to notice a permanent
+    // that turns into a creature.
+    this.objectShape = new Map()
     // Ability instance -> the grpId of the card it came from.
     this.abilitySource = new Map()
     // Ability instance -> the instanceId of the permanent that created it.
@@ -573,6 +576,8 @@ class LogParser {
       // then 8/7 once its exile bonus switched on). A value only arrives when it
       // changes, so the last one is kept. **An empty `{}` is zero** — protobuf omits
       // a 0, the same trap as `isTapped` — so presence decides, not the value.
+      this.noticeAnimation(object)
+
       // Presence-authoritative, like isTapped: protobuf drops a false.
       if (object.isCopy) this.objectCopies.add(object.instanceId)
       else this.objectCopies.delete(object.instanceId)
@@ -631,6 +636,7 @@ class LogParser {
       this.objectTapped = new Map()
       this.objectStats = new Map()
       this.objectCopies = new Set()
+      this.objectShape = new Map()
       this.abilitySource = new Map()
       this.abilityInstanceOwner = new Map()
       this.abilityInstances = new Set()
@@ -668,6 +674,35 @@ class LogParser {
     if (targetId == null) return 'someone'
     if (this.seatNames[targetId] !== undefined) return this.seatLabel(targetId)
     return this.nameOf(targetId) || 'a permanent'
+  }
+
+  // A permanent turning into a creature: an earthbent land, an animated land, a crewed
+  // Vehicle. No annotation states it; the object is simply re-sent with Creature in
+  // its card types, so it is noticed by comparing with the last report. Without it a
+  // land took counters, was damaged and died with nothing saying why that was possible.
+  //
+  // Only gaining Creature is reported. Most animations end at end of turn, so the
+  // reverse would add a predictable line every turn. Only a permanent already on the
+  // battlefield counts: one entering as a creature is not becoming one, and a zone
+  // change gives it a new id, so it starts with no history anyway. No size (the
+  // counters that animate it often arrive in the same message, so the first size seen
+  // already includes them) and no cause (no annotation names one).
+  noticeAnimation(object) {
+    if (!object.cardTypes) return
+    const id = object.instanceId
+    const creature = object.cardTypes.includes('CardType_Creature')
+    const zoneId = object.zoneId != null ? object.zoneId : this.objectZone.get(id)
+    const onBattlefield = this.zoneKind(zoneId) === 'battlefield'
+    const before = this.objectShape.get(id)
+    this.objectShape.set(id, { creature, onBattlefield })
+
+    if (!before || before.creature || !creature || !before.onBattlefield || !onBattlefield) return
+    const name = this.nameOf(id)
+    if (!name) return
+    this.push('animate', `${name} becomes a creature`, {
+      seat: object.controllerSeatId ?? this.objectController.get(id),
+      card: name,
+    })
   }
 
   // "(8/7)", or empty when the size was never reported.
