@@ -187,6 +187,8 @@ Some terminals — VS Code's integrated tooling, and Claude Code's shell — set
 4. The server log shows `latest.yml`, the blockmaps and the installer being fetched; the banner appears; Restart relaunches into the new version (Add/Remove Programs and the exe's file version both read it).
 5. Clean up: uninstall (`Uninstall MTG Sideboard Coach.exe /S`), delete `%LOCALAPPDATA%\mtg-sideboard-coach-updater` (the downloaded installer is cached there), reinstall the real build.
 
+**Proven on the real path too.** Release 1.1.0 was the first update delivered through GitHub itself: an installed 1.0.0 found it, downloaded it and restarted into 1.1.0 cleanly (confirmed by the owner, 2026-10-22). Both paths are now verified: the generic feed by the local test above, and the GitHub provider by a real release.
+
 This matters because **the updater is the one part that cannot fix itself**: a release with a broken update path can never deliver its own repair — everyone on it would have to reinstall by hand. Test any change to `updates.cjs` or the packaging config this way before releasing.
 
 ### Releasing
