@@ -1673,23 +1673,44 @@ function runDescriber(verb) {
 // Matched on the numbers rather than on adjacency alone: life changes constantly for
 // reasons that are not damage — a shockland, a painful draw — and folding one of
 // those into an unrelated attack would invent a cause. The merge only happens when
-// the life lost is exactly the damage dealt, to exactly the player who took it.
+// the life lost is exactly the damage dealt, to exactly the player who took it, from
+// the same source (the life change names the creature that dealt it).
+//
+// The life loss need not be the very next line. A damage step reports every blow
+// first and every result after — `A hits Jace, B hits Rish, Jace loses loyalty, Rish
+// loses life` — so the search skips the step's other blows and results, and stops at
+// anything else. Each life line is claimed once, in order, so two copies of a card
+// hitting the same player each take their own.
 function mergeDamageLife(events) {
+  const STEP_KINDS = new Set(['damage', 'counter', 'life'])
+  const claimed = new Set()
   const out = []
 
   for (let i = 0; i < events.length; i += 1) {
+    if (claimed.has(i)) continue
     const damage = events[i]
-    const life = events[i + 1]
-    const pairs = damage.kind === 'damage'
-      && life && life.kind === 'life'
-      && life.seat === damage.targetId
-      && life.delta === -damage.amount
 
-    if (!pairs) {
+    let match = -1
+    if (damage.kind === 'damage') {
+      for (let j = i + 1; j < events.length && STEP_KINDS.has(events[j].kind); j += 1) {
+        const life = events[j]
+        if (!claimed.has(j) && life.kind === 'life'
+          && life.seat === damage.targetId
+          && life.delta === -damage.amount
+          && life.card === damage.card) {
+          match = j
+          break
+        }
+      }
+    }
+
+    if (match === -1) {
       out.push(damage)
       continue
     }
 
+    const life = events[match]
+    claimed.add(match)
     out.push({
       ...damage,
       // "life" is spelled out here because, unlike the standalone life lines, this
@@ -1699,19 +1720,11 @@ function mergeDamageLife(events) {
       // cannot pick the total back out of the text.
       lifeAfter: life.total,
     })
-    i += 1
   }
 
   return out
 }
 
-// A modal spell's mode belongs on the line that cast it: "casts and resolves
-// Glacierwood Siege, choosing Temur" rather than two lines naming the same card.
-//
-// The choice is logged on resolution, which can trail the cast by a few lines when
-// the spell's own effects are reported in between, so this searches backwards rather
-// than requiring adjacency — but never past a turn boundary, and never further than
-// a spell's own resolution would plausibly reach.
 // The choice folded onto the line that cast or played the card. A card choosing twice
 // reads as one clause: "choosing A and B". A named card joins `cards` so it previews.
 function foldChoice(host, choice) {
@@ -1725,6 +1738,13 @@ function foldChoice(host, choice) {
   }
 }
 
+// A modal spell's mode belongs on the line that cast it: "casts and resolves
+// Glacierwood Siege, choosing Temur" rather than two lines naming the same card.
+//
+// The choice is logged on resolution, which can trail the cast by a few lines when
+// the spell's own effects are reported in between, so this searches backwards rather
+// than requiring adjacency — but never past a turn boundary, and never further than
+// a spell's own resolution would plausibly reach.
 function mergeChoiceIntoCast(events) {
   const LOOKBACK = 8
   // A choice made *as* a permanent enters ("As this land enters, choose a basic land
