@@ -922,6 +922,23 @@ button:disabled {
   border-color: #4a8668;
 }
 
+/* Pips stay on one line and keep their size; a long name wraps instead. Without this
+   the name squeezed the pips until they wrapped onto a second row. The row already
+   centres vertically, so one row of pips sits centred beside a two-line name. */
+.matchup-row {
+  gap: 10px;
+  padding-block: 6px;
+}
+
+.matchup-row > span {
+  min-width: 0;
+}
+
+.matchup-row .mana-pips {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
 .matchup-name,
 .notes {
   background: #171b1f;
