@@ -169,6 +169,8 @@ class LogParser {
     this.objectTapped = new Map()
     // instanceId -> latest { power, toughness }, with every modifier already applied.
     this.objectStats = new Map()
+    // instanceId -> { value, msg }: a planeswalker's loyalty and the message reporting it.
+    this.objectLoyalty = new Map()
     // Instances that are copies (`isCopy`), such as an offspring token.
     this.objectCopies = new Set()
     // instanceId -> { creature, onBattlefield } as last reported, to notice a permanent
@@ -572,22 +574,28 @@ class LogParser {
       // previous value forward instead left every land reading as permanently
       // tapped, since untapping is exactly the message that omits the field.
       this.objectTapped.set(object.instanceId, Boolean(object.isTapped))
-      // Live power/toughness: counters, equipment, pumps and conditional bonuses are
-      // already applied (Keen-Eyed Curator read 3/3, then 4/3 with Lavaspur Boots,
-      // then 8/7 once its exile bonus switched on). A value only arrives when it
-      // changes, so the last one is kept. **An empty `{}` is zero** — protobuf omits
-      // a 0, the same trap as `isTapped` — so presence decides, not the value.
       this.noticeAnimation(object)
 
       // Presence-authoritative, like isTapped: protobuf drops a false.
       if (object.isCopy) this.objectCopies.add(object.instanceId)
       else this.objectCopies.delete(object.instanceId)
+      // Live power/toughness: counters, equipment, pumps and conditional bonuses are
+      // already applied (Keen-Eyed Curator read 3/3, then 4/3 with Lavaspur Boots,
+      // then 8/7 once its exile bonus switched on). A value only arrives when it
+      // changes, so the last one is kept. **An empty `{}` is zero** — protobuf omits
+      // a 0, the same trap as `isTapped` — so presence decides, not the value.
       if (object.power || object.toughness) {
         const previous = this.objectStats.get(object.instanceId) || {}
         this.objectStats.set(object.instanceId, {
           power: object.power ? object.power.value || 0 : previous.power,
           toughness: object.toughness ? object.toughness.value || 0 : previous.toughness,
         })
+      }
+      // A planeswalker's live loyalty, the same way: Jace read 4, then 2 after a hit,
+      // then `{}` — zero — as the second hit killed it. Stamped with the message so a
+      // loyalty line only ever states a value reported alongside it, never a stale one.
+      if (object.loyalty) {
+        this.objectLoyalty.set(object.instanceId, { value: object.loyalty.value || 0, msg: this.messageIndex })
       }
       // An ability on the stack carries the card it came from. Without this the
       // token line can only say a token appeared, not what made it.
@@ -636,6 +644,7 @@ class LogParser {
       this.objectZone = new Map()
       this.objectTapped = new Map()
       this.objectStats = new Map()
+      this.objectLoyalty = new Map()
       this.objectCopies = new Set()
       this.objectShape = new Map()
       this.abilitySource = new Map()
@@ -979,7 +988,8 @@ class LogParser {
         const cause = source ? ` ${delta < 0 ? 'to' : 'from'} ${source}` : ''
         this.push('life',
           `${this.seatLabel(seat)} ${direction} ${Math.abs(delta)} life${cause}${total != null ? ` (now ${total})` : ''}`,
-          { seat, delta, total, card: source })
+          // `msg`: the total is the one this message ends on (see mergeDamageResults).
+          { seat, delta, total, card: source, msg: this.messageIndex })
       }
     }
 
@@ -1027,6 +1037,9 @@ class LogParser {
         // grouped by source, stopped the two halves of one effect from merging.
         // counterPhrase decides whether to show it, once the run is known.
         const kind = this.resolveCounter(details.counter_type)
+        // Loyalty left, when the object was reported in this same message — so a
+        // blow to a planeswalker can say what it left behind.
+        const loyalty = this.objectLoyalty.get(id)
 
         this.push('counter', counterPhrase([target], added, amount, kind, source), {
           seat: this.objectController.get(id),
@@ -1035,6 +1048,9 @@ class LogParser {
           amount,
           counterKind: kind,
           source,
+          instanceId: id,
+          msg: this.messageIndex,
+          loyaltyAfter: loyalty && loyalty.msg === this.messageIndex ? loyalty.value : undefined,
         })
       }
     }
@@ -1180,6 +1196,10 @@ class LogParser {
           targetLabel: target,
           // The target is hoverable too; only the source was before.
           cards: [source, targetName].filter(Boolean),
+          msg: this.messageIndex,
+          // Which creature, not just its name, so a double striker's two hits are not
+          // counted as two copies.
+          sourceInstance: annotation.affectorId,
         })
       }
     }
@@ -1429,9 +1449,9 @@ class LogParser {
       events = relocateTurnEnd(mergeResolveAttach(mergeChoiceIntoCast(collapseCastResolve(events))))
       events = collapseRuns(events, 'mill', runDescriber('mills'), sameActor)
       events = collapseRuns(events, 'draw', runDescriber('draws'), sameActor)
-      events = mergeDamageLife(events)
+      events = mergeDamageResults(events)
       events = collapseRuns(events, 'attack', attackDescriber, sameTarget)
-      events = collapseRuns(events, 'damage', damageDescriber, sameTarget)
+      events = collapseRuns(events, 'damage', damageDescriber, sameTargetOnce)
       events = collapseRuns(events, 'counter', counterDescriber, sameCounter)
       events = collapseRuns(events, 'select', selectDescriber)
       events = collapseRuns(events, 'token', tokenDescriber, sameToken)
@@ -1564,6 +1584,8 @@ function joinList(items) {
 // a single Cruel Calculations otherwise fills the turn with near-identical lines.
 // Only a strictly adjacent run by the same player is merged: anything in between is
 // a different beat of the turn, and folding across it would reorder the narration.
+// `sameGroup` compares a candidate with the run's first entry, and also gets the run
+// so far for a rule that depends on every member (see sameTargetOnce).
 function collapseRuns(events, kind, describe, sameGroup = (a, b) => a.seat === b.seat) {
   const out = []
 
@@ -1574,7 +1596,8 @@ function collapseRuns(events, kind, describe, sameGroup = (a, b) => a.seat === b
     }
 
     let end = i + 1
-    while (end < events.length && events[end].kind === kind && sameGroup(events[end], events[i])) end += 1
+    while (end < events.length && events[end].kind === kind
+      && sameGroup(events[end], events[i], events.slice(i, end))) end += 1
 
     const run = events.slice(i, end)
     out.push(run.length === 1 ? run[0] : describe(run))
@@ -1668,20 +1691,27 @@ function runDescriber(verb) {
 }
 
 // "Warg deals 3 damage to LazyPunda" followed by "LazyPunda loses 3 life (now 15)"
-// is one event reported twice, so the pair becomes a single line.
+// is one event reported twice, so the pair becomes a single line. Damage to a
+// planeswalker is the same: it removes that many loyalty counters, and the counter
+// line only restates the blow — "deals 2 damage to Jace (now 2 loyalty)".
 //
 // Matched on the numbers rather than on adjacency alone: life changes constantly for
 // reasons that are not damage — a shockland, a painful draw — and folding one of
 // those into an unrelated attack would invent a cause. The merge only happens when
-// the life lost is exactly the damage dealt, to exactly the player who took it, from
-// the same source (the life change names the creature that dealt it).
+// the result is exactly the damage dealt, to exactly what took it, from the same
+// source (the life change and the counter both name the creature that dealt it).
 //
-// The life loss need not be the very next line. A damage step reports every blow
+// The result need not be the very next line. A damage step reports every blow
 // first and every result after — `A hits Jace, B hits Rish, Jace loses loyalty, Rish
 // loses life` — so the search skips the step's other blows and results, and stops at
-// anything else. Each life line is claimed once, in order, so two copies of a card
+// anything else. Each result is claimed once, in order, so two copies of a card
 // hitting the same player each take their own.
-function mergeDamageLife(events) {
+//
+// The total is the one the message ends on: life comes from the player record and
+// loyalty from the object, each reported once per message. So a target that changes
+// again later in the same message states its total only on the last change — on an
+// earlier one the number would already include blows not yet narrated.
+function mergeDamageResults(events) {
   const STEP_KINDS = new Set(['damage', 'counter', 'life'])
   const claimed = new Set()
   const out = []
@@ -1693,11 +1723,7 @@ function mergeDamageLife(events) {
     let match = -1
     if (damage.kind === 'damage') {
       for (let j = i + 1; j < events.length && STEP_KINDS.has(events[j].kind); j += 1) {
-        const life = events[j]
-        if (!claimed.has(j) && life.kind === 'life'
-          && life.seat === damage.targetId
-          && life.delta === -damage.amount
-          && life.card === damage.card) {
+        if (!claimed.has(j) && isDamageResult(damage, events[j])) {
           match = j
           break
         }
@@ -1709,20 +1735,57 @@ function mergeDamageLife(events) {
       continue
     }
 
-    const life = events[match]
+    const result = events[match]
     claimed.add(match)
+    const isLife = result.kind === 'life'
+    const total = isLife ? result.total : result.loyaltyAfter
+    const stated = total != null && !changesAgainInMessage(events, match)
     out.push({
       ...damage,
-      // "life" is spelled out here because, unlike the standalone life lines, this
+      // The unit is spelled out because, unlike the standalone life line, this
       // sentence is about damage — the number needs saying what it counts.
-      text: life.total != null ? `${damage.text} (now ${life.total} life)` : damage.text,
-      // Kept as a field too: collapsing several attackers rebuilds the sentence and
+      text: stated ? `${damage.text} (now ${total} ${isLife ? 'life' : 'loyalty'})` : damage.text,
+      // Kept as fields too: collapsing several attackers rebuilds the sentence and
       // cannot pick the total back out of the text.
-      lifeAfter: life.total,
+      lifeAfter: stated && isLife ? total : undefined,
+      loyaltyAfter: stated && !isLife ? total : undefined,
     })
   }
 
   return out
+}
+
+// The life or loyalty a blow took, as opposed to any other change to the same player
+// or planeswalker. Damage to a permanent carries its instance id as the target.
+function isDamageResult(damage, event) {
+  if (event.kind === 'life') {
+    return event.seat === damage.targetId
+      && event.delta === -damage.amount
+      && event.card === damage.card
+  }
+  return event.kind === 'counter'
+    && event.counterKind === 'Loyalty'
+    && !event.added
+    && event.instanceId === damage.targetId
+    && event.amount === damage.amount
+    && event.source === damage.card
+}
+
+// Whether the player or planeswalker in the result at `index` changes again later in
+// the same message, in which case the total that message reports is not yet the total
+// at this point.
+function changesAgainInMessage(events, index) {
+  const result = events[index]
+  for (let k = index + 1; k < events.length && events[k].kind !== 'turn'; k += 1) {
+    const later = events[k]
+    if (later.msg > result.msg) break
+    if (later.msg !== result.msg) continue
+    const same = result.kind === 'life'
+      ? later.kind === 'life' && later.seat === result.seat
+      : later.kind === 'counter' && later.counterKind === 'Loyalty' && later.instanceId === result.instanceId
+    if (same) return true
+  }
+  return false
 }
 
 // The choice folded onto the line that cast or played the card. A card choosing twice
@@ -1804,6 +1867,15 @@ function sameTarget(a, b) {
   return a.targetId === b.targetId
 }
 
+// Hits on one target merge, but never two from the same creature. That is a double
+// striker hitting in both damage steps, and since the merged line counts names it
+// read as two copies — "2 Pawpatch Recruit deal 4 damage" — when one creature hit
+// twice. Two Llanowar Elves are two instances, so they still merge and count.
+function sameTargetOnce(hit, first, run) {
+  return hit.targetId === first.targetId
+    && !(hit.sourceInstance != null && run.some((entry) => entry.sourceInstance === hit.sourceInstance))
+}
+
 function attackDescriber(run) {
   const names = run.map((entry) => entry.card).filter(Boolean)
   // Each attacker keeps its own size. Counting runs on name *and* size, so two
@@ -1828,20 +1900,26 @@ function damageDescriber(run) {
   const names = run.map((entry) => entry.card).filter(Boolean)
   const subject = names.length === run.length ? joinList(countedList(names)) : `${run.length} sources`
   const total = run.reduce((sum, entry) => sum + (entry.amount || 0), 0)
-  // The life total comes from the *last* hit in the run, not the first: each blow
-  // reports the running total, and only the final one is where the player ended up.
-  const lifeAfter = run.reduce((latest, entry) => (entry.lifeAfter != null ? entry.lifeAfter : latest), null)
+  // The total is the *last* hit's, not the first's: each blow reports the running
+  // total, and only the final one is where the target ended up. Taken from that hit
+  // alone, so when it states none the run states none — an earlier hit's total would
+  // understate what the whole run did.
+  const last = run[run.length - 1]
+  const lifeAfter = last.lifeAfter != null ? last.lifeAfter : null
+  const loyaltyAfter = last.loyaltyAfter != null ? last.loyaltyAfter : null
+  const now = lifeAfter != null ? ` (now ${lifeAfter} life)`
+    : loyaltyAfter != null ? ` (now ${loyaltyAfter} loyalty)` : ''
 
   return {
     turn: run[0].turn,
     kind: 'damage',
-    text: `${subject} deal ${total} damage to ${run[0].targetLabel}` +
-      `${lifeAfter != null ? ` (now ${lifeAfter} life)` : ''}`,
+    text: `${subject} deal ${total} damage to ${run[0].targetLabel}${now}`,
     cards: [...new Set(run.flatMap((entry) => entry.cards || []))],
     amount: total,
     targetId: run[0].targetId,
     targetLabel: run[0].targetLabel,
     lifeAfter,
+    loyaltyAfter,
   }
 }
 
