@@ -35,6 +35,7 @@ const KIND_COLORS: Record<string, string> = {
   mana: '#6f7d8c',
   counts: '#7e8a95',
   animate: '#d9b87a',
+  gain: '#d9b87a',
   unresolved: '#b58a8a',
 }
 

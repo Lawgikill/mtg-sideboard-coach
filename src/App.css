@@ -2289,7 +2289,8 @@ button:disabled {
 .replay-token,
 .replay-counter,
 .replay-attach,
-.replay-animate {
+.replay-animate,
+.replay-gain {
   color: #d9b87a;
 }
 

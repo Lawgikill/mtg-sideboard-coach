@@ -40,6 +40,15 @@ function cleanAbilityText(text, cardName) {
     .replace(/\.$/, '') || null
 }
 
+// A granted keyword as it reads mid-sentence: "Double strike" -> "double strike",
+// "Ward {o1}" -> "ward {1}". Null for rules text, which MTGA always ends with a
+// period, so only a keyword ever comes back.
+function keywordText(text) {
+  if (!text || /[."]\s*$/.test(text.trim())) return null
+  const cleaned = cleanAbilityText(text)
+  return cleaned ? cleaned.charAt(0).toLowerCase() + cleaned.slice(1) : null
+}
+
 function abilityEffect(text, cardName) {
   if (!text) return null
   const cleaned = text
@@ -212,6 +221,8 @@ class LogParser {
     // performs the bottoming can be dropped once it has been reported.
     this.pendingBottoms = new Map()
     this.emptyLibraries = new Set()
+    // Persistent AddAbility annotation id -> instance ids already reported as gaining it.
+    this.grantsSeen = new Map()
     // seat -> how many turns that player has taken. MTGA counts turns globally
     // (1, 2, 3 alternating between players); the narration counts each player's own
     // turns instead, so both players show a Turn 1, a Turn 2 and so on.
@@ -623,9 +634,57 @@ class LogParser {
     }
 
     for (const annotation of state.annotations || []) this.handleAnnotation(annotation)
+    this.noticeGrantedAbilities(state)
 
     for (const seat of emptied) {
       this.push('library', `${this.seatLabel(seat)}'s library is empty`, { seat })
+    }
+  }
+
+  // A permanent gaining an ability from something: Practiced Offense's double strike,
+  // Lavaspur Boots' haste and ward, Spectacular Spider-Man's hexproof and
+  // indestructible. No transient annotation says so. It lives in a *persistent*
+  // AddAbility annotation naming the source, the permanents and the granted ability
+  // ids, re-sent in every message while the effect lasts, so each permanent is reported
+  // once, when it first appears in one. It is game state, so the opponent's grants
+  // arrive like our own — which is what makes a choice like Practiced Offense's
+  // (double strike or lifelink) readable for either player, where the question itself
+  // is a private prompt to the caster.
+  //
+  // Only keywords are narrated. The one granted rules-text ability seen was a
+  // Glacierwood Siege granting itself its chosen mode, which "choosing Temur" already
+  // says. An AddAbility that is also a Counter is a Hexproof counter, already a line.
+  noticeGrantedAbilities(state) {
+    for (const id of state.diffDeletedPersistentAnnotationIds || []) this.grantsSeen.delete(id)
+
+    for (const annotation of state.persistentAnnotations || []) {
+      const types = annotation.type || []
+      if (!types.includes('AnnotationType_AddAbility') || types.includes('AnnotationType_Counter')) continue
+      const seen = this.grantsSeen.get(annotation.id) || new Set()
+      this.grantsSeen.set(annotation.id, seen)
+      const fresh = (annotation.affectedIds || []).filter((id) => !seen.has(id))
+      if (fresh.length === 0) continue
+      for (const id of fresh) seen.add(id)
+
+      const abilities = detailList(annotation, 'grpid')
+        .map((grpId) => keywordText(this.resolveAbilityText(grpId)))
+        .filter(Boolean)
+      const targets = fresh.map((id) => this.nameOf(id)).filter(Boolean)
+      if (abilities.length === 0 || targets.length === 0) continue
+
+      // A permanent granting itself something (Keen-Eyed Curator's trample) needs no
+      // credit; anything else names what did it.
+      const source = this.sourceOf(annotation.affectorId)
+      const credit = source && targets.some((name) => name !== source) ? source : null
+      this.push('gain',
+        `${joinList(countedList(targets))} ${targets.length > 1 ? 'gain' : 'gains'} ${joinList(abilities)}` +
+          `${credit ? ` (${credit})` : ''}`,
+        {
+          seat: this.objectController.get(fresh[0]),
+          card: targets.length === 1 ? targets[0] : null,
+          cards: targets,
+          source: credit,
+        })
     }
   }
 
@@ -662,6 +721,7 @@ class LogParser {
       this.handHistory = new Map()
       this.pendingBottoms = new Map()
       this.emptyLibraries = new Set()
+      this.grantsSeen = new Map()
       this.seatTurns = new Map()
     }
 
