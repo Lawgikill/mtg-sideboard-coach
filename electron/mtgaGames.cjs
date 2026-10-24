@@ -15,7 +15,8 @@ let cardNameCache = null
 // id, resolved from the same table the card names come from.
 let choiceLabelCache = null
 // CounterType enum value -> display name ("+1/+1", "Hexproof", ...).
-let counterTypeCache = null
+// Enum type -> (value -> label), one cache per type.
+const enumLabelCache = new Map()
 // Ability id -> the card that owns it, for abilities that belong to exactly one card.
 let abilityOwnerCache = null
 // Ability id -> its rules text, for naming which ability was activated.
@@ -78,8 +79,10 @@ function loadChoiceLabels() {
 // MTGA ships the counter-type enum in its own database, so the kind of counter is a
 // lookup rather than an inference. An earlier version read it from a
 // PowerToughnessMod arriving in the same message, which only ever worked for +1/+1.
-function loadCounterTypes() {
-  if (counterTypeCache) return counterTypeCache
+// Labels for one of MTGA's enums (`SELECT … FROM Enums WHERE Type = ?`), joined to
+// the localization table. Counter kinds and subtypes both live here.
+function loadEnumLabels(type) {
+  if (enumLabelCache.has(type)) return enumLabelCache.get(type)
 
   const types = new Map()
   try {
@@ -90,8 +93,8 @@ function loadCounterTypes() {
     const rows = db.prepare(`
       SELECT e.Value AS value, l.Loc AS label
       FROM Enums e JOIN Localizations_enUS l ON e.LocId = l.LocId
-      WHERE e.Type = 'CounterType'
-    `).all()
+      WHERE e.Type = ?
+    `).all(type)
     for (const row of rows) {
       // The same value appears several times, some rows carrying display markup
       // ("<nobr>+1/+1</nobr>"). Keep the first clean one.
@@ -103,8 +106,19 @@ function loadCounterTypes() {
     return types
   }
 
-  counterTypeCache = types
+  enumLabelCache.set(type, types)
   return types
+}
+
+// Counter kinds: `1` -> `+1/+1`, `138` -> `Hexproof`.
+function loadCounterTypes() {
+  return loadEnumLabels('CounterType')
+}
+
+// Creature and land subtypes: `29` -> `Forest`. A choice of land type (Multiversal
+// Passage) reports its pick as one of these.
+function loadSubTypes() {
+  return loadEnumLabels('SubType')
 }
 
 // An annotation's affector is often an ability, identified by an id that is not a
@@ -186,6 +200,8 @@ async function loadGames(app, decks = []) {
   const resolveChoice = (locId) => labels.get(locId) || null
   const counterTypes = loadCounterTypes()
   const resolveCounter = (value) => counterTypes.get(value) || null
+  const subTypes = loadSubTypes()
+  const resolveSubType = (value) => subTypes.get(value) || null
   const abilityOwners = loadAbilityOwners()
   const resolveAbility = (abilityId) => abilityOwners.get(abilityId) || null
   const abilityTexts = loadAbilityText()
@@ -199,7 +215,7 @@ async function loadGames(app, decks = []) {
     let parsed
     try {
       parsed = await parseLogFile(logPath, {
-        resolveName, resolveChoice, resolveCounter, resolveAbility, resolveAbilityText,
+        resolveName, resolveChoice, resolveCounter, resolveAbility, resolveAbilityText, resolveSubType,
       })
     } catch {
       continue
@@ -260,5 +276,5 @@ async function loadGames(app, decks = []) {
 }
 
 module.exports = {
-  loadGames, loadCardNames, loadChoiceLabels, loadCounterTypes, loadAbilityOwners, loadAbilityText,
+  loadGames, loadCardNames, loadChoiceLabels, loadCounterTypes, loadSubTypes, loadAbilityOwners, loadAbilityText,
 }

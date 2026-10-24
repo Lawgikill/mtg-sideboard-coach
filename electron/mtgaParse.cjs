@@ -136,6 +136,7 @@ class LogParser {
     this.resolveName = resolveName
     this.resolveChoice = resolveChoice || (() => null)
     this.resolveCounter = resolveCounter || (() => null)
+    this.resolveSubType = () => null
     this.resolveAbility = resolveAbility || (() => null)
     this.resolveAbilityText = resolveAbilityText || (() => null)
     // Ability instance -> where its line belongs, captured when it goes on the
@@ -1115,15 +1116,29 @@ class LogParser {
     // A modal spell records which mode was taken, as a localization id rather than
     // text — "Glacierwood Siege" otherwise resolves with no hint of which half of
     // the card is now in play.
+    // What a choice picked, by domain. Each value is resolved through the table it
+    // belongs to, and an unrecognised domain stays silent rather than printing a raw
+    // number. Seen in real logs:
+    //   'localization_id' - a mode label (Glacierwood Siege: "Temur")
+    //   13                - a card name, the value being the name's localization id
+    //                       (Petrified Hamlet named Fountainport; the permanent also
+    //                       carries a LinkInfo with ChooseLinkType "CardName")
+    //   9                 - a subtype (Multiversal Passage chose Forest, 29 in the
+    //                       SubType enum; LinkInfo ChooseLinkType "Type")
+    // Domains 13 and 9 were each seen once, so their reading rests on one example
+    // apiece, cross-checked against what the card asks for.
     if (types.includes('AnnotationType_ChoiceResult')) {
-      const label = details.Choice_Domain === 'localization_id'
-        ? this.resolveChoice(details.Choice_Value)
-        : null
+      const domain = details.Choice_Domain
+      const value = details.Choice_Value
+      const label = domain === 'localization_id' || domain === 13
+        ? this.resolveChoice(value)
+        : domain === 9 ? this.resolveSubType(value) : null
       if (label) {
         const seat = this.objectController.get(annotation.affectorId)
         const source = this.sourceOf(annotation.affectorId)
         this.push('choice', `${this.seatLabel(seat)} chooses ${label}${source ? ` for ${source}` : ''}`,
-          { seat, card: source, choice: label })
+          // A named card is a card, so it should preview like one.
+          { seat, card: source, choice: label, choiceCard: domain === 13 ? label : null })
       }
     }
 
@@ -1697,20 +1712,55 @@ function mergeDamageLife(events) {
 // the spell's own effects are reported in between, so this searches backwards rather
 // than requiring adjacency — but never past a turn boundary, and never further than
 // a spell's own resolution would plausibly reach.
+// The choice folded onto the line that cast or played the card. A card choosing twice
+// reads as one clause: "choosing A and B". A named card joins `cards` so it previews.
+function foldChoice(host, choice) {
+  return {
+    ...host,
+    text: host.choices
+      ? `${host.text} and ${choice.choice}`
+      : `${host.text}, choosing ${choice.choice}`,
+    choices: [...(host.choices || []), choice.choice],
+    cards: choice.choiceCard ? [...(host.cards || []), choice.choiceCard] : host.cards,
+  }
+}
+
 function mergeChoiceIntoCast(events) {
   const LOOKBACK = 8
+  // A choice made *as* a permanent enters ("As this land enters, choose a basic land
+  // type") is logged before the transfer that plays it, so it is held briefly for the
+  // line that follows. Kept short, and same card and player, so it cannot reach an
+  // unrelated later copy.
+  const LOOKAHEAD = 3
   const out = []
 
   for (const event of events) {
+    if ((event.kind === 'cast' || event.kind === 'play') && event.card) {
+      let early = -1
+      for (let i = out.length - 1; i >= 0 && out.length - i <= LOOKAHEAD; i -= 1) {
+        if (out[i].kind === 'turn') break
+        if (out[i].kind === 'choice' && out[i].card === event.card && out[i].seat === event.seat) {
+          early = i
+          break
+        }
+      }
+      if (early !== -1) {
+        const [choice] = out.splice(early, 1)
+        out.push(foldChoice(event, choice))
+        continue
+      }
+    }
+
     if (event.kind !== 'choice' || !event.card || !event.choice) {
       out.push(event)
       continue
     }
 
+    // Lands are played, not cast, and a land's choice belongs on its play line.
     let target = -1
     for (let i = out.length - 1; i >= 0 && out.length - i <= LOOKBACK; i -= 1) {
       if (out[i].kind === 'turn') break
-      if ((out[i].kind === 'cast' || out[i].kind === 'resolve') && out[i].card === event.card) {
+      if ((out[i].kind === 'cast' || out[i].kind === 'resolve' || out[i].kind === 'play') && out[i].card === event.card) {
         target = i
         break
       }
@@ -1721,15 +1771,7 @@ function mergeChoiceIntoCast(events) {
       continue
     }
 
-    const host = out[target]
-    out[target] = {
-      ...host,
-      // A card choosing twice reads as one clause: "choosing A and B".
-      text: host.choices
-        ? `${host.text} and ${event.choice}`
-        : `${host.text}, choosing ${event.choice}`,
-      choices: [...(host.choices || []), event.choice],
-    }
+    out[target] = foldChoice(out[target], event)
   }
 
   return out
@@ -2422,6 +2464,7 @@ async function parseLogFile(logPath, options = {}) {
     resolveName, options.resolveChoice, options.resolveCounter,
     options.resolveAbility, options.resolveAbilityText,
   )
+  if (options.resolveSubType) parser.resolveSubType = options.resolveSubType
   parser.cancelledCasts = await findCancelledCasts(logPath)
   // Both of these need the multi-line client-to-GRE blocks the streaming parse cannot
   // see, so the file is read whole once and shared.
