@@ -160,6 +160,8 @@ class LogParser {
     // Activated abilities on the stack and not yet resolved: ability instance ->
     // { source, seat }. One deleted while still here never resolved.
     this.openActivations = new Map()
+    // A ward trigger part-way through resolving: { id, cost, source, payer, paid }.
+    this.wardResolving = null
     this.games = []
     this.submittedDecks = []
     this.game = null
@@ -662,6 +664,40 @@ class LogParser {
   // Only keywords are narrated. The one granted rules-text ability seen was a
   // Glacierwood Siege granting itself its chosen mode, which "choosing Temur" already
   // says. An AddAbility that is also a Counter is a Hexproof counter, already a line.
+  // A ward trigger starting to resolve. Its id must be an ability instance: ability
+  // ids and card grpIds share one numeric space, so a spell's grpid must never be read
+  // as an ability's text. Only a mana ward is followed ("Ward {1}"); a ward paid in
+  // life is rules text to keywordText and has no ManaPaid to show for it anyway.
+  openWardPayment(instanceId, grpId) {
+    if (!this.abilityInstanceOwner.has(instanceId) && !this.abilityInstances.has(instanceId)) return
+    const ward = keywordText(this.resolveAbilityText(grpId))
+    if (!ward || !/^ward\s+\{/.test(ward)) return
+    this.wardResolving = {
+      id: instanceId,
+      cost: ward.slice('ward'.length).trim(),
+      source: this.sourceOf(instanceId),
+      payer: null,
+      paid: false,
+    }
+  }
+
+  // "Rish pays {1} for ward (Keen-Eyed Curator)". Read from the log: the trigger names
+  // its permanent, and the payment is mana paid while it resolved — Chandra's -2
+  // targeted a Curator wearing Lavaspur Boots, and the tax took the land Chandra had
+  // left open, which otherwise made the "tapped out" line look wrong. When ward is not
+  // paid there is nothing to say here: the spell or ability is countered, which is
+  // already reported. Seen once in the archives.
+  closeWardPayment(instanceId) {
+    const ward = this.wardResolving
+    if (!ward || ward.id !== instanceId) return
+    this.wardResolving = null
+    if (!ward.paid || ward.payer == null) return
+    this.push('ward', `${this.seatLabel(ward.payer)} pays ${ward.cost} for ward${ward.source ? ` (${ward.source})` : ''}`, {
+      seat: ward.payer,
+      source: ward.source,
+    })
+  }
+
   noticeGrantedAbilities(state) {
     for (const id of state.diffDeletedPersistentAnnotationIds || []) this.grantsSeen.delete(id)
 
@@ -731,6 +767,7 @@ class LogParser {
       this.emptyLibraries = new Set()
       this.grantsSeen = new Map()
       this.openActivations = new Map()
+      this.wardResolving = null
       this.seatTurns = new Map()
     }
 
@@ -956,6 +993,7 @@ class LogParser {
     this.turn = turnInfo.turnNumber
     this.turnDrawSeen = false
     this.castingOpen = false
+    this.wardResolving = null
     this.abilityTargets = new Map()
     if (this.turn === 1) this.reportOpeningHands()
 
@@ -1169,6 +1207,15 @@ class LogParser {
     // instance, which is exactly the discriminator needed.
     if (types.includes('AnnotationType_ResolutionStart')) {
       this.reportResolve(annotation.affectorId)
+      this.openWardPayment(annotation.affectorId, details.grpid)
+    }
+    if (types.includes('AnnotationType_ResolutionComplete')) this.closeWardPayment(annotation.affectorId)
+
+    // Mana paid while ward resolves is the ward tax: the trigger counters the spell or
+    // ability unless its controller pays, and that payment is all that happens in it.
+    if (types.includes('AnnotationType_ManaPaid') && this.wardResolving) {
+      this.wardResolving.paid = true
+      this.wardResolving.payer = this.objectController.get(annotation.affectorId) ?? this.wardResolving.payer
     }
 
     // Either marker means an activation did resolve. Complete counts too: Bushwhack

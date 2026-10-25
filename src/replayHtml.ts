@@ -18,6 +18,7 @@ const KIND_COLORS: Record<string, string> = {
   opening: '#d8c89a',
   cast: '#e7e9ea',
   activate: '#e7e9ea',
+  ward: '#e7e9ea',
   attack: '#e7e9ea',
   damage: '#e0a39b',
   life: '#e0a39b',

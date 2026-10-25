@@ -2246,7 +2246,8 @@ button:disabled {
 
 .replay-cast,
 .replay-attack,
-.replay-activate {
+.replay-activate,
+.replay-ward {
   color: #e7e9ea;
 }
 
