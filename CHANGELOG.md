@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.2 — 2026-10-24
+
+Versions are two-part from here on: 1.2, 1.3, and so on. Almost every change is in the Replay narration.
+
+### New in the narration
+
+- **Abilities a permanent gains** are reported: `Pawpatch Recruit gains double strike (Practiced Offense)`, `Leatherhead, Swamp Stalker gains haste and ward {1} (Lavaspur Boots)`. This is also how a Practiced Offense choice of double strike or lifelink shows, including the opponent's.
+- **Ward payments**: `Rish pays {1} for ward (Keen-Eyed Curator)`. Without this, a land tapped for ward just looked missing from the turn's mana.
+- **Activated abilities that never resolve**: `Lavaspur Boots' ability never resolves`, for example an equip whose target died in response.
+- **Named cards and chosen land types**: `Rish plays Petrified Hamlet, choosing Fountainport`, `Lawgikill plays Multiversal Passage tapped, choosing Forest`.
+- **A permanent becoming a creature**: `Plains becomes a creature`, after an earthbend.
+- **Damage to a planeswalker shows the loyalty left**: `deals 2 damage to The Theorist, Jace Beleren (now 2 loyalty)`. This replaces a separate loyalty-counter line that only repeated the hit.
+
+### Clearer lines
+
+- **Mulligans read in order**: `Lawgikill mulligans and draws 7: …` then `Lawgikill bottoms Lavaspur Boots and keeps 6`, in place of "mulligans to 6" above a seven-card list. After a double mulligan, each redraw gets its own line. Opening hands are introduced with a colon.
+- **Damage and the life it costs stay on one line**, even when other combat results are reported between them.
+
+### Fixes
+
+- A double striker's two hits no longer read as two copies (`2 Pawpatch Recruit deal 4 damage`).
+- A life or loyalty total is no longer shown on a line before the remaining hits in the same combat step have been listed.
+
+### Elsewhere
+
+- Matchup colour pips in the Plans tab stay on one line, centred beside the name.
+- The app shows its version as two parts (`v1.2`).
+
 ## 1.1.0 — 2026-10-22
 
 The first update delivered through the app's own updater. Every change is in the Replay narration.
