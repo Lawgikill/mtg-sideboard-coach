@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3 — 2026-10-24
+
+- The **New Deck** card on the home screen shows its **+** centred above the label, no longer floating beside it.
+
 ## 1.2 — 2026-10-24
 
 Versions are two-part from here on: 1.2, 1.3, and so on. Almost every change is in the Replay narration.
