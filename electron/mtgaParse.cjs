@@ -107,6 +107,11 @@ function castOrigin(fromKind) {
   return ` from their ${fromKind}`
 }
 
+// "Lavaspur Boots' ability", "Map's ability".
+function possessive(name) {
+  return /s$/i.test(name) ? `${name}'` : `${name}'s`
+}
+
 function detailsToObject(annotation) {
   const out = {}
   for (const detail of annotation.details || []) {
@@ -152,6 +157,9 @@ class LogParser {
     // stack. Its costs are paid before the activation is committed, so the line has
     // to be put back above them.
     this.abilityOpenedAt = new Map()
+    // Activated abilities on the stack and not yet resolved: ability instance ->
+    // { source, seat }. One deleted while still here never resolved.
+    this.openActivations = new Map()
     this.games = []
     this.submittedDecks = []
     this.game = null
@@ -722,6 +730,7 @@ class LogParser {
       this.pendingBottoms = new Map()
       this.emptyLibraries = new Set()
       this.grantsSeen = new Map()
+      this.openActivations = new Map()
       this.seatTurns = new Map()
     }
 
@@ -1026,6 +1035,28 @@ class LogParser {
       for (const id of annotation.affectedIds || []) {
         this.abilityInstanceOwner.set(id, annotation.affectorId)
         if (this.game) this.abilityOpenedAt.set(id, this.game.events.length)
+        // Ids are reused, so a new instance under this one ends any stale entry.
+        this.openActivations.delete(id)
+      }
+    }
+
+    // An activated ability leaving the stack without having resolved. Every ability
+    // that resolves logs ResolutionStart and ResolutionComplete before it is deleted;
+    // this one is deleted with neither. Across every archive that was 1 of 19
+    // activations — an equip whose target, an earthbent Plains, was killed in
+    // response — while the same equip resolved normally twice in that game.
+    //
+    // Worded like a spell's "never resolves", for the same reason: the log shows the
+    // outcome, not the cause. A lost target and a Stifle look the same.
+    if (types.includes('AnnotationType_AbilityInstanceDeleted')) {
+      for (const id of annotation.affectedIds || []) {
+        const open = this.openActivations.get(id)
+        if (!open) continue
+        this.openActivations.delete(id)
+        this.push('unresolved', `${possessive(open.source)} ability never resolves`, {
+          seat: open.seat,
+          card: open.source,
+        })
       }
     }
 
@@ -1140,6 +1171,12 @@ class LogParser {
       this.reportResolve(annotation.affectorId)
     }
 
+    // Either marker means an activation did resolve. Complete counts too: Bushwhack
+    // showed that Start can be missing from a real resolution.
+    if (types.includes('AnnotationType_ResolutionStart') || types.includes('AnnotationType_ResolutionComplete')) {
+      this.openActivations.delete(annotation.affectorId)
+    }
+
     // ResolutionComplete is deliberately NOT a fallback for a missing Start. It was
     // tried, to give Bushwhack a "resolves" line: the spell resolved and the log says
     // so, but only through Complete. Two things make it unusable. It lands *after*
@@ -1166,6 +1203,7 @@ class LogParser {
       const abilityId = (annotation.affectedIds || [])[0]
       const source = abilityId != null ? this.sourceOf(abilityId) : null
       if (source && this.game) {
+        this.openActivations.set(abilityId, { source, seat: annotation.affectorId })
         const effect = abilityEffect(this.resolveAbilityText(details.abilityGrpId), source)
         // Spliced where the ability went on the stack, not appended here: the
         // commitment is the *last* step of activating, so appending put the costs
