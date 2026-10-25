@@ -204,6 +204,8 @@ This matters because **the updater is the one part that cannot fix itself**: a r
 3. Commit, tag `v<x.y.z>` (annotated), push `main` and the tag.
 4. `gh release create v<x.y.z> release/mtg-sideboard-coach-setup-<x.y.z>.exe release/mtg-sideboard-coach-setup-<x.y.z>.exe.blockmap release/latest.yml --title "MTG Sideboard Coach <x.y>" --notes-file <notes>`. The title drops the zero patch; the tag and file names keep it.
 
+**Never package while a Vite server is running from the project.** The dev server watches the whole project folder, `release/` included, and Windows will not rename a watched directory, so the build dies with `EPERM: operation not permitted, rename '…\release\win-unpacked.tmp' -> '…\release\win-unpacked'` — and a plain `Rename-Item` of that folder is then refused too. Stopping the shell that launched the server can leave its `node` children running (that is how it happened during 1.3), so check with `Get-CimInstance Win32_Process | Where-Object CommandLine -like '*vite*'`, end them, delete the leftover `win-unpacked.tmp`, and rebuild.
+
 **Never run `npx @electron/asar extract-file … package.json` from the project root.** It writes the packaged, trimmed `package.json` into the current directory, silently replacing the project's own and dropping its scripts, build config and dev dependencies. That happened once while checking the 1.1.0 build and was caught by `git diff` before committing. Use `asar list` to inspect, or extract into a scratch folder.
 
 All three files must come from **the same build**: `latest.yml` carries the installer's sha512, and a mismatch makes every client reject the download. Never publish a draft or prerelease expecting clients to see it — the updater ignores both.
