@@ -886,40 +886,55 @@ class LogParser {
       const known = cards.length === ids.length
       const history = this.handHistory.get(seat) || []
 
-      // The hand drawn for the final mulligan, before any of it went back. It is the
-      // snapshot before the kept one, and it is what "mulligans to 6" is really
-      // describing: you draw seven and choose what to put back.
+      // The hand drawn for the final mulligan, before any of it went back: the
+      // snapshot before the kept one. The kept hand is it minus what was bottomed.
       const beforeBottom = history.length >= 2 ? history[history.length - 2].cards : null
       const bottomed = beforeBottom && beforeBottom.length > cards.length
         ? LogParser.difference(beforeBottom, cards)
         : []
 
-      // Only with a hand genuinely earlier than the one that was bottomed from — with
-      // two snapshots the earlier one *is* that hand, and printing it twice says
-      // nothing.
-      if (known && mulligans > 0 && history.length >= 3) {
+      // The names travel alongside the text so the UI can make each one hoverable
+      // without having to search the sentence against the whole card database.
+      if (!known || bottomed.length === 0) {
+        const detail = known ? ` — ${joinList(countedList(cards))}` : ''
+        this.push('opening', `${who} ${kept}${detail}`, { seat, turn: 0, cards: known ? cards : [] })
+        continue
+      }
+
+      // Read as the sequence it was: each hand drawn, then what went back and what
+      // was kept. "Mulligans to 6" over a seven-card list read as a contradiction.
+      //
+      // A complete history is the original hand, one draw per mulligan, then the kept
+      // hand. Only then is the first snapshot known to be the original; with fewer the
+      // original was never captured, and with more something unexpected was recorded,
+      // so either way the original is left out rather than a redraw being mislabelled
+      // as it. The draws shown are the latest, at most one per mulligan.
+      const complete = history.length === mulligans + 2
+      if (complete) {
         const original = history[0].cards
         this.push('opening', `${who}'s original hand — ${joinList(countedList(original))}`, {
           seat, turn: 0, cards: original,
         })
       }
-
-      // The names travel alongside the text so the UI can make each one hoverable
-      // without having to search the sentence against the whole card database.
-      const shown = bottomed.length > 0 ? beforeBottom : cards
-      const detail = known ? ` — ${joinList(countedList(shown))}` : ''
-      this.push('opening', `${who} ${kept}${detail}`, { seat, turn: 0, cards: known ? shown : [] })
-
-      if (bottomed.length > 0) {
-        this.push('opening', `Bottoms ${joinList(countedList(bottomed))}`, {
-          seat, turn: 0, cards: bottomed,
+      const draws = history.slice(complete ? 1 : Math.max(0, history.length - 1 - mulligans), -1)
+      for (const draw of draws) {
+        this.push('opening', `${who} mulligans and draws ${draw.cards.length}: ${joinList(countedList(draw.cards))}`, {
+          seat, turn: 0, cards: draw.cards,
         })
-        // Recorded so the transfer that actually performs it can be dropped: it would
-        // otherwise reappear as the first line of turn 1, restating this.
-        const owed = new Map()
-        for (const name of bottomed) owed.set(name, (owed.get(name) || 0) + 1)
-        this.pendingBottoms.set(seat, owed)
       }
+
+      // A comma before "and keeps" once the list has its own "and", so "bottoms A and
+      // B, and keeps 5" cannot read as three things bottomed.
+      const sent = countedList(bottomed)
+      this.push('opening',
+        `${who} bottoms ${joinList(sent)}${sent.length > 1 ? ',' : ''} and keeps ${ids.length}`,
+        { seat, turn: 0, cards: bottomed })
+
+      // Recorded so the transfer that actually performs it can be dropped: it would
+      // otherwise reappear as the first line of turn 1, restating this.
+      const owed = new Map()
+      for (const name of bottomed) owed.set(name, (owed.get(name) || 0) + 1)
+      this.pendingBottoms.set(seat, owed)
     }
   }
 
