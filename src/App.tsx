@@ -2455,6 +2455,13 @@ function useUpdateStatus(): UpdateStatus | null {
   return status
 }
 
+// Versions read as two parts ("1.2"). package.json, electron-builder and the updater all
+// need three, so the stored version is 1.2.0 and a zero patch is dropped for display
+// only — a hotfix such as 1.2.1 still shows all three.
+function displayVersion(version: string | undefined): string {
+  return (version ?? '').replace(/^(\d+\.\d+)\.0$/, '$1')
+}
+
 // Shown once an update has finished downloading, on every screen of the main window.
 // Restarting is a choice, never forced: an update left alone installs itself the next
 // time the app is closed normally, which the banner says so ignoring it is safe.
@@ -2466,7 +2473,7 @@ function UpdateBanner({ status }: { status: UpdateStatus | null }) {
     <div className="update-banner" role="status">
       <RefreshCw size={16} />
       <span>
-        <strong>Version {status.version}</strong> is ready to install.
+        <strong>Version {displayVersion(status.version)}</strong> is ready to install.
         {' '}<span className="update-banner-note">If you don't restart now, it installs the next time you close the app.</span>
       </span>
       <button className="primary-button" type="button" onClick={() => window.electronAPI?.installUpdate()}>
@@ -2483,7 +2490,7 @@ function UpdateBanner({ status }: { status: UpdateStatus | null }) {
 // runs anyway; this is for not wanting to wait for it.
 function UpdateIndicator({ status }: { status: UpdateStatus | null }) {
   if (!status) return null
-  const version = <span className="update-version">v{status.currentVersion}</span>
+  const version = <span className="update-version">v{displayVersion(status.currentVersion)}</span>
 
   // A dev run has nothing to update, so it shows the version alone.
   if (status.state === 'unsupported') return version
@@ -2494,8 +2501,8 @@ function UpdateIndicator({ status }: { status: UpdateStatus | null }) {
     unsupported: '',
     checking: 'Checking for updates\u2026',
     current: 'Up to date',
-    downloading: `Downloading v${status.version}\u2026 ${status.percent ?? 0}%`,
-    ready: `v${status.version} ready \u2014 restart to update`,
+    downloading: `Downloading v${displayVersion(status.version)}\u2026 ${status.percent ?? 0}%`,
+    ready: `v${displayVersion(status.version)} ready \u2014 restart to update`,
     error: "Couldn't check for updates",
   }[status.state]
 

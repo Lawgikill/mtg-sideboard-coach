@@ -27,6 +27,12 @@ npm run lint         # ESLint
 
 `package.json` is the only source of the version. The app reads it at runtime through `app.getVersion()` (the home screen shows it, and the updater compares against it), and electron-builder uses it to name the installer `mtg-sideboard-coach-setup-<version>.exe` and to write `latest.yml`. Bump with `npm version <x.y.z> --no-git-tag-version` so `package-lock.json` follows — before the reset the lockfile had drifted to `2.12.0` while `package.json` said `3.2.0`, because only one of them was being edited by hand. Do not search-and-replace version strings in the lockfile: unrelated dependencies (`boolean`, `escalade`) are themselves at `3.2.0`.
 
+**From 1.2 on, versions are two-part: 1.2, 1.3, 1.4…**, by the owner's choice (2026-10-24), with each release bumping the minor number. The tooling cannot follow that literally — npm, electron-builder and electron-updater all require three-part semver, so `package.json` holds `1.2.0` — and so the split is:
+
+- **Shown to people as two parts**: the release title (`MTG Sideboard Coach 1.2`), the `CHANGELOG.md` heading, and the app itself, where `displayVersion` in `App.tsx` drops a **zero** patch from the home-screen version and the update messages. A non-zero patch still shows, so a hotfix (`1.2.1`) never masquerades as its parent.
+- **Three parts everywhere a machine reads it**: `package.json`, the installer filename, `latest.yml`, and the **git tag** (`v1.2.0`). The tag keeps the full form because the updater has only been proven against tags shaped like `v1.1.0`, and it is the one part of the app that cannot repair itself if a release breaks it.
+- 1.0.0 and 1.1.0 keep their three-part names; they were released that way.
+
 ## Source Files
 
 | File | Role |
@@ -193,10 +199,10 @@ This matters because **the updater is the one part that cannot fix itself**: a r
 
 ### Releasing
 
-1. `npm version <x.y.z> --no-git-tag-version`, and add a `CHANGELOG.md` entry.
+1. `npm version <x.y.0> --no-git-tag-version` (next minor; see the two-part scheme under Versioning), and add a `CHANGELOG.md` entry headed `## <x.y> — <date>`.
 2. `npm run package:win` — produces the installer, its `.blockmap` and `latest.yml` in `release/`.
 3. Commit, tag `v<x.y.z>` (annotated), push `main` and the tag.
-4. `gh release create v<x.y.z> release/mtg-sideboard-coach-setup-<x.y.z>.exe release/mtg-sideboard-coach-setup-<x.y.z>.exe.blockmap release/latest.yml --title "MTG Sideboard Coach <x.y.z>" --notes-file <notes>`.
+4. `gh release create v<x.y.z> release/mtg-sideboard-coach-setup-<x.y.z>.exe release/mtg-sideboard-coach-setup-<x.y.z>.exe.blockmap release/latest.yml --title "MTG Sideboard Coach <x.y>" --notes-file <notes>`. The title drops the zero patch; the tag and file names keep it.
 
 **Never run `npx @electron/asar extract-file … package.json` from the project root.** It writes the packaged, trimmed `package.json` into the current directory, silently replacing the project's own and dropping its scripts, build config and dev dependencies. That happened once while checking the 1.1.0 build and was caught by `git diff` before committing. Use `asar list` to inspect, or extract into a scratch folder.
 
