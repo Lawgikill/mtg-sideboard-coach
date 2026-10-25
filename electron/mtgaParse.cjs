@@ -896,7 +896,7 @@ class LogParser {
       // The names travel alongside the text so the UI can make each one hoverable
       // without having to search the sentence against the whole card database.
       if (!known || bottomed.length === 0) {
-        const detail = known ? ` — ${joinList(countedList(cards))}` : ''
+        const detail = known ? `: ${joinList(countedList(cards))}` : ''
         this.push('opening', `${who} ${kept}${detail}`, { seat, turn: 0, cards: known ? cards : [] })
         continue
       }
