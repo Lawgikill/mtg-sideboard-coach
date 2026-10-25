@@ -246,7 +246,7 @@ Events are produced during parsing, then rewritten by a chain of passes in `fini
 - **Opening hands** (`Game start, hand resolution`) are reported when turn 1 is announced, not at game start: a London mulligan draws seven and bottoms back, so earlier than that the hand is not settled. **Mulligans are derived from hand size** (7 − cards held) rather than read from a counter. `mulliganReq` does carry a `mulliganCount` on the second and later requests, but it is sent only to the player being asked, so it can confirm our own count and never the opponent's — the derivation is the only thing that works for both seats. The opponent's hand is hidden by the game, so their line is just the count.
 - **The hands thrown away are recoverable, for our own seat.** `recordHandHistory` keeps every distinct hand held during mulligan resolution, which makes the whole sequence readable:
   ```
-  Lawgikill's original hand — Bushwhack; Brightglass Gearhulk; 2 Practiced Offense; Forest; Ba Sing Se; and Surrak, Elusive Hunter
+  Lawgikill's original hand: Bushwhack; Brightglass Gearhulk; 2 Practiced Offense; Forest; Ba Sing Se; and Surrak, Elusive Hunter
   Lawgikill mulligans and draws 7: Starting Town; Lavaspur Boots; Practiced Offense; Multiversal Passage; Abandoned Air Temple; Leatherhead, Swamp Stalker; and Bushwhack
   Lawgikill bottoms Lavaspur Boots and keeps 6
   ```

@@ -912,7 +912,7 @@ class LogParser {
       const complete = history.length === mulligans + 2
       if (complete) {
         const original = history[0].cards
-        this.push('opening', `${who}'s original hand — ${joinList(countedList(original))}`, {
+        this.push('opening', `${who}'s original hand: ${joinList(countedList(original))}`, {
           seat, turn: 0, cards: original,
         })
       }
