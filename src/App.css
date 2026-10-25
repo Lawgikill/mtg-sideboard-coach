@@ -532,9 +532,14 @@ button:disabled {
   width: 100%;
 }
 
+/* Icon above label, both centred. Without display: flex the alignment properties did
+   nothing, and the + sat inline on the text's baseline, visibly higher than the words. */
 .add-card {
   align-items: center;
   color: #a8b0b8;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   justify-content: center;
   min-height: 166px;
   padding: 16px;
