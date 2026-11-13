@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.4 — 2026-11-12
+
+Fixes to how the Replay tab reads MTGA logs. The biggest affects any session with more than one match.
+
+### Fixes
+
+- **Every match in a session is read on its own terms.** One MTGA log covers a whole session, and your seat can change from match to match. Seats, player names, results and decks were worked out once per log, so in a session of several matches:
+  - matches where you sat in the other seat showed wins as losses, and listed your own cards as the opponent's;
+  - every match was named after the session's last opponent;
+  - most matches after the first showed no result at all;
+  - every match was filed under the first match's deck.
+- **A game won by the opponent conceding no longer shows as a loss** when it was not the first game of the match.
+- **Deck matching works for best-of-one sessions.** The deck used for game 1 was never read, so a session starting with a best-of-one match could not be matched to a deck.
+- **Your own cards no longer appear in "what they showed".** A creature of yours dying into exile, or a warp spell you recast from exile, was counted as the opponent's. Those recasts also read `Seat 483 casts Nova Hellkite from exile`; they now read `Lawgikill casts and resolves Nova Hellkite from exile`.
+- **Two-sided cards are listed under their front name** in the opponent summary, so a Pompous Battlemage's prepared Improvised Act no longer appears as a separate card.
+- **The matchup decklist marks two-sided cards as seen**, and they are no longer mistaken for boarded-in cards, when the list on file holds the full `Front // Back` name.
+
+Matches already imported into the Journal keep what was imported; re-import any whose results matter.
+
 ## 1.3 — 2026-10-24
 
 - The **New Deck** card on the home screen shows its **+** centred above the label, no longer floating beside it.
