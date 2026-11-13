@@ -997,11 +997,14 @@ class LogParser {
       if (object.attackState === 'AttackState_Declared') {
         const name = this.nameOf(id) || 'A creature'
         const target = this.targetLabel(object.attackInfo ? object.attackInfo.targetId : null)
-        // No size here: it goes on the combat damage line instead (see DamageDealt),
-        // because a creature can grow between declaring and dealing damage.
-        this.push('attack', `${name} attacks ${target}`, {
+        // Size at the moment of attacking. The combat damage line states it again as
+        // damage is dealt, since a creature can grow in between (see DamageDealt) —
+        // the two together show the growth.
+        const stats = this.statsLabel(id)
+        this.push('attack', `${name}${stats ? ` ${stats}` : ''} attacks ${target}`, {
           seat: object.controllerSeatId,
           card: this.nameOf(id),
+          stats,
           targetId: object.attackInfo ? object.attackInfo.targetId : null,
           targetLabel: target,
         })
@@ -2426,7 +2429,9 @@ function sameTargetOnce(hit, first, run) {
 
 function attackDescriber(run) {
   const names = run.map((entry) => entry.card).filter(Boolean)
-  const subject = names.length === run.length ? joinList(countedList(names)) : `${run.length} creatures`
+  // A size per attacker, counted on name *and* size, as on the damage line.
+  const labels = run.map((entry) => (entry.card ? `${entry.card}${entry.stats ? ` ${entry.stats}` : ''}` : null))
+  const subject = names.length === run.length ? joinList(countedList(labels)) : `${run.length} creatures`
   return {
     turn: run[0].turn,
     kind: 'attack',
