@@ -163,13 +163,23 @@ class LogParser {
     // A ward trigger part-way through resolving: { id, cost, source, payer, paid }.
     this.wardResolving = null
     this.games = []
-    this.submittedDecks = []
     this.game = null
+    // Seat -> player name for the match being read, which is what lines are labelled
+    // with as they are written. Each match's own copy is kept in its MatchState.
     this.seatNames = {}
     this.localSeat = null
-    this.seatMessageCounts = new Map()
-    this.matchCompletedReason = null
-    this.finalGameResults = []
+    // matchID -> MatchState. A log holds every match of an MTGA session, and seats are
+    // not fixed between them: the player was seat 2 in one match and seat 1 in the
+    // next. Everything that depends on who sat where is therefore kept per match —
+    // when it was kept per file, two of six matches in one log read with the seats
+    // swapped: wins as losses, and the player's own cards listed as the opponent's.
+    this.matchStates = new Map()
+    // The match messages are currently being counted towards. Set by the room event
+    // that opens a match, and by the first game state naming it.
+    this.currentMatchId = null
+    // Game one's deck, from the ConnectResp that opens a match. It can arrive before
+    // the room event, so it is held until the match it belongs to is known.
+    this.pendingDeck = null
     this.cancelledCasts = new Set()
     this.messageIndex = 0
     this.pendingSearch = null
@@ -467,6 +477,35 @@ class LogParser {
     return zone ? zone.kind : null
   }
 
+  matchState(matchId) {
+    const key = matchId || null
+    let state = this.matchStates.get(key)
+    if (!state) {
+      state = {
+        seatNames: {},
+        seatMessageCounts: new Map(),
+        submittedDecks: [],
+        completedReason: null,
+        finalGameResults: [],
+        localSeat: null,
+      }
+      this.matchStates.set(key, state)
+    }
+    return state
+  }
+
+  // Called for the room event that opens a match: names its seats, and makes it the
+  // match that the messages which follow are counted towards.
+  openMatch(matchId, players) {
+    this.currentMatchId = matchId
+    const state = this.matchState(matchId)
+    for (const player of players) {
+      if (player.systemSeatId == null) continue
+      state.seatNames[player.systemSeatId] = player.playerName
+      this.seatNames[player.systemSeatId] = player.playerName
+    }
+  }
+
   push(kind, text, extra = {}) {
     if (!this.game) return
     // Anything emitted between a card reaching the stack and the cast being
@@ -479,15 +518,29 @@ class LogParser {
   handleMessage(message) {
     if (message.systemSeatIds && message.systemSeatIds.length === 1) {
       const seat = message.systemSeatIds[0]
-      this.seatMessageCounts.set(seat, (this.seatMessageCounts.get(seat) || 0) + 1)
+      const counts = this.matchState(this.currentMatchId).seatMessageCounts
+      counts.set(seat, (counts.get(seat) || 0) + 1)
     }
 
-    // The deck this client submitted. Captured so a parsed game can be matched back
-    // to a deck in the app; a Bo3 may re-submit after sideboarding, so keep each.
+    // Game one's deck arrives in the ConnectResp that opens a match, before any game
+    // state names the match, so it is held until one does. It was never read, which
+    // left attribution using the file's first resubmission — game two of the first
+    // match, for every match in the file, and nothing at all when that was a Bo1.
+    if (message.connectResp && message.connectResp.deckMessage) {
+      const deck = message.connectResp.deckMessage
+      this.pendingDeck = {
+        gameNumber: 1,
+        main: (deck.deckCards || []).slice(),
+        sideboard: (deck.sideboardCards || []).slice(),
+      }
+    }
+
+    // A resubmission between games, which belongs to the match already in progress.
+    // Captured so a parsed game can be matched back to a deck in the app.
     const submitted = message.submitDeckReq || message.submitDeckConfirmation
-    if (submitted && submitted.deck) {
-      this.submittedDecks.push({
-        gameNumber: this.game ? this.game.gameNumber : null,
+    if (submitted && submitted.deck && this.game) {
+      this.matchState(this.game.matchId).submittedDecks.push({
+        gameNumber: this.game.gameNumber,
         main: (submitted.deck.deckCards || []).slice(),
         sideboard: (submitted.deck.sideboardCards || []).slice(),
       })
@@ -737,13 +790,20 @@ class LogParser {
   }
 
   handleGameInfo(gameInfo) {
-    const isNewGame = !this.game
-      || this.game.matchId !== (gameInfo.matchID || null)
-      || this.game.gameNumber !== (gameInfo.gameNumber || 1)
+    const opensMatch = !this.game || this.game.matchId !== (gameInfo.matchID || null)
+    const isNewGame = opensMatch || this.game.gameNumber !== (gameInfo.gameNumber || 1)
+
+    // A held ConnectResp deck is game one's of the match this opens. One that arrives
+    // mid-match is a reconnect, and is dropped so it cannot pass to the next match.
+    if (this.pendingDeck && opensMatch) {
+      this.matchState(gameInfo.matchID || null).submittedDecks.unshift(this.pendingDeck)
+    }
+    this.pendingDeck = null
 
     if (isNewGame) {
       this.game = createGame(gameInfo)
       this.games.push(this.game)
+      this.currentMatchId = this.game.matchId
       // Object ids and turn counters restart with each game.
       this.objectGrp = new Map()
       this.objectController = new Map()
@@ -780,13 +840,21 @@ class LogParser {
     // every later message, including ones stamped with game 2's number. Assigning by
     // the current game number therefore copied game 1's verdict onto game 2. Only a
     // message that says the game is over is reporting that game's own result.
+    //
+    // And even that message is cumulative: game 2's GameOver lists game 1's result
+    // first and its own second. Taking the first game-scope entry recorded a game 2 the
+    // player won, by concession, as lost. The list is in game order, so a game's own
+    // result is the entry at its position.
     if (gameInfo.stage === 'GameStage_GameOver') {
-      for (const result of gameInfo.results || []) {
-        if (result.scope !== 'MatchScope_Game') continue
-        const target = this.games.find((game) => game.gameNumber === (gameInfo.gameNumber || 1))
-        if (target && !target.result) {
-          target.result = { winningTeamId: result.winningTeamId, reason: result.reason }
-        }
+      const gameNumber = gameInfo.gameNumber || 1
+      const result = (gameInfo.results || [])
+        .filter((entry) => entry.scope === 'MatchScope_Game')[gameNumber - 1]
+      // Matched on the match too: matching on the game number alone found an earlier
+      // match's game 1, already decided, and dropped this one's result.
+      const target = this.games.find((game) => game.matchId === (gameInfo.matchID || null)
+        && game.gameNumber === gameNumber)
+      if (result && target && !target.result) {
+        target.result = { winningTeamId: result.winningTeamId, reason: result.reason }
       }
     }
   }
@@ -1354,7 +1422,7 @@ class LogParser {
       const targetId = (annotation.affectedIds || [])[0]
       if (amount && targetId != null) {
         // Low ids are seats; anything else is a permanent on the battlefield.
-        const hitsPlayer = this.seatNames[targetId] !== undefined || targetId === this.localSeat
+        const hitsPlayer = this.seatNames[targetId] !== undefined
         const targetName = hitsPlayer ? null : this.nameOf(targetId)
         const target = hitsPlayer ? this.seatLabel(targetId) : (targetName || 'a permanent')
         this.push('damage', `${source || 'Something'} deals ${amount} damage to ${target}`, {
@@ -1596,20 +1664,25 @@ class LogParser {
   }
 
   finish() {
-    // Whichever seat the server addressed most is this client's own.
-    let best = null
-    for (const [seat, count] of this.seatMessageCounts) {
-      if (!best || count > best.count) best = { seat, count }
+    // Whichever seat the server addressed most is this client's own — per match, since
+    // the seat changes between matches.
+    for (const state of this.matchStates.values()) {
+      let best = null
+      for (const [seat, count] of state.seatMessageCounts) {
+        if (!best || count > best.count) best = { seat, count }
+      }
+      state.localSeat = best ? best.seat : null
     }
-    this.localSeat = best ? best.seat : null
 
     this.concludeSearch()
 
     // Games the stream never closed out take their result from the match summary,
-    // matched by position: resultList holds one game-scope entry per game, in order.
-    for (const [index, game] of this.games.entries()) {
+    // matched by position: resultList holds one game-scope entry per game of *that*
+    // match, in order.
+    for (const game of this.games) {
       if (game.result) continue
-      const reported = this.finalGameResults[index]
+      const index = this.games.filter((each) => each.matchId === game.matchId).indexOf(game)
+      const reported = this.matchState(game.matchId).finalGameResults[index]
       if (!reported) continue
       game.result = { winningTeamId: reported.winningTeamId, reason: reported.reason }
       // Flagged so the UI can say the narration stops short rather than implying the
@@ -1619,6 +1692,14 @@ class LogParser {
 
     // Seat labels are only known at the end, so render text once the local seat is.
     for (const game of this.games) {
+      // Labels and the local seat are the game's own match's, not the file's last.
+      const state = this.matchState(game.matchId)
+      this.seatNames = state.seatNames
+      this.localSeat = state.localSeat
+      game.localSeat = state.localSeat
+      game.seatNames = state.seatNames
+      game.submittedDecks = state.submittedDecks
+      game.matchCompletedReason = state.completedReason
       // Targets first: this appends to the cast line, and collapseCastResolve then
       // rewrites "casts X, targeting Y" into "casts and resolves X, targeting Y".
       let events = this.attachTargets(game.events)
@@ -2767,19 +2848,21 @@ async function parseLogFile(logPath, options = {}) {
 
     const room = payload.matchGameRoomStateChangedEvent
     if (room) {
-      const players = room.gameRoomInfo?.gameRoomConfig?.reservedPlayers || []
-      for (const player of players) {
-        if (player.systemSeatId != null) parser.seatNames[player.systemSeatId] = player.playerName
+      const config = room.gameRoomInfo?.gameRoomConfig
+      const final = room.gameRoomInfo?.finalMatchResult
+      const matchId = config?.matchId || final?.matchId || null
+      if (room.gameRoomInfo?.stateType === 'MatchGameRoomStateType_Playing') {
+        parser.openMatch(matchId, config?.reservedPlayers || [])
       }
+      const state = parser.matchState(matchId)
       // Why the match ended: normally "Success", but a concession, timeout or
       // disconnect says so here rather than in any game's own result.
-      const final = room.gameRoomInfo?.finalMatchResult
-      if (final?.matchCompletedReason) parser.matchCompletedReason = final.matchCompletedReason
+      if (final?.matchCompletedReason) state.completedReason = final.matchCompletedReason
       // The authoritative per-game outcomes, in order. The GRE stream can stop
       // mid-game — a conceded game 2 simply has no GameOver message — so this is
       // often the only place that game's result exists.
       if (final?.resultList) {
-        parser.finalGameResults = final.resultList.filter((entry) => entry.scope === 'MatchScope_Game')
+        state.finalGameResults = final.resultList.filter((entry) => entry.scope === 'MatchScope_Game')
       }
     }
 
@@ -2796,10 +2879,6 @@ async function parseLogFile(logPath, options = {}) {
       ...game,
       sideboarding: sideboarding.get(`${game.matchId}:${game.gameNumber}`) || null,
     })),
-    seatNames: parser.seatNames,
-    localSeat: parser.localSeat,
-    submittedDecks: parser.submittedDecks,
-    matchCompletedReason: parser.matchCompletedReason,
   }
 }
 

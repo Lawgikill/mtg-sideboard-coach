@@ -193,6 +193,17 @@ function loadAbilityText() {
   return texts
 }
 
+// Which app deck a match was played with, judged from the first list it submitted.
+function attributeDeck(submitted, resolveName, decks) {
+  const names = submitted ? submitted.main.map(resolveName).filter(Boolean) : []
+  const assignment = names.length > 0 ? matchDeck(names, decks) : null
+  return {
+    deckId: assignment ? assignment.deckId : null,
+    deckName: assignment ? assignment.deckName : null,
+    deckScore: assignment ? assignment.score : 0,
+  }
+}
+
 async function loadGames(app, decks = []) {
   const names = loadCardNames()
   const labels = loadChoiceLabels()
@@ -221,14 +232,12 @@ async function loadGames(app, decks = []) {
       continue
     }
 
-    const submitted = parsed.submittedDecks[0]
-    const submittedNames = submitted
-      ? submitted.main.map(resolveName).filter(Boolean)
-      : []
-    const assignment = submittedNames.length > 0 ? matchDeck(submittedNames, decks) : null
-
     for (const game of parsed.games) {
       if (game.events.length === 0) continue
+
+      // Seats, names, deck and end reason are all the game's own match's: one log
+      // holds a whole session, and the player's seat changes from match to match.
+      const { localSeat, seatNames } = game
 
       // A match can span two logs if MTGA restarts mid-match, so games are keyed by
       // matchID across every archive rather than per file.
@@ -237,16 +246,14 @@ async function loadGames(app, decks = []) {
         matchId: game.matchId,
         source: entry.filename,
         playedAt: entry.modifiedAt,
-        seatNames: parsed.seatNames,
-        localSeat: parsed.localSeat,
-        opponent: Object.entries(parsed.seatNames)
-          .filter(([seat]) => Number(seat) !== parsed.localSeat)
+        seatNames,
+        localSeat,
+        opponent: Object.entries(seatNames)
+          .filter(([seat]) => Number(seat) !== localSeat)
           .map(([, name]) => name)[0] || 'Unknown',
-        deckId: assignment ? assignment.deckId : null,
-        deckName: assignment ? assignment.deckName : null,
-        deckScore: assignment ? assignment.score : 0,
+        ...attributeDeck(game.submittedDecks[0], resolveName, decks),
         matchWinCondition: game.matchWinCondition,
-        completedReason: parsed.matchCompletedReason || null,
+        completedReason: game.matchCompletedReason || null,
         games: [],
       }
 
@@ -258,10 +265,10 @@ async function loadGames(app, decks = []) {
         truncated: Boolean(game.truncated),
         // Null rather than false when either side is unknown: "on the play" is a
         // real claim about the game, and a guess would read as fact.
-        onThePlay: game.firstSeat == null || parsed.localSeat == null
+        onThePlay: game.firstSeat == null || localSeat == null
           ? null
-          : game.firstSeat === parsed.localSeat,
-        won: game.result ? game.result.winningTeamId === parsed.localSeat : null,
+          : game.firstSeat === localSeat,
+        won: game.result ? game.result.winningTeamId === localSeat : null,
         events: game.events,
         // Exact, not inferred: this is our own list before and after boarding.
         sideboarding: game.sideboarding || null,
