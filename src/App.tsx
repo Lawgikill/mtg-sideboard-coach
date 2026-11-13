@@ -2713,7 +2713,7 @@ function ReplayView({
 
   // Only offered while nothing is chosen. Once categorised, the player's answer
   // stands and a second opinion on screen is just clutter.
-  const guess = assignedArchetype ? null : guessArchetype(currentMatch.match, deck.matchups)
+  const guess = assignedArchetype ? null : guessArchetype(currentMatch.match, deck.matchups, cardByName)
 
   // Built once and shared by the on-screen blocks, the decklist's seen-marking and both
   // export formats, so a file cannot disagree with the screen it was taken from.
@@ -2742,7 +2742,7 @@ function ReplayView({
     const entries: DeckEntry[] = []
     const unknown: string[] = []
 
-    for (const [name, count] of observedOpponentCards(currentMatch.match)) {
+    for (const [name, count] of observedOpponentCards(currentMatch.match, cardByName)) {
       const card = cardByName.get(normalizeCardName(name))
       // A token is not a card in their deck — the same exclusion the summary makes.
       if (card?.isToken) continue
@@ -3244,9 +3244,11 @@ function MatchupDecklist({ decklist, seen, cardByName }: {
   const [open, setOpen] = useState(false)
 
   // Marked against the names seen this match, so the list reads as "of everything they
-  // run, this is what I faced". Normalised on both sides because MTGA's name for a card
-  // need not match the database's spelling.
-  const seenNames = new Set(seen.map(([name]) => normalizeCardName(name)))
+  // run, this is what I faced". Compared as the card each name resolves to, because
+  // MTGA's name need not match the database's spelling, and a multi-face card is seen
+  // under its front face while a list on file may hold the full "A // B" name.
+  const cardKey = (name: string) => cardByName.get(normalizeCardName(name))?.id ?? normalizeCardName(name)
+  const seenNames = new Set(seen.map(([name]) => cardKey(name)))
 
   return (
     <div className="replay-decklist">
@@ -3267,7 +3269,7 @@ function MatchupDecklist({ decklist, seen, cardByName }: {
                     key={name}
                     name={`${quantity} ${name}`}
                     card={cardByName.get(normalizeCardName(name))}
-                    className={seenNames.has(normalizeCardName(name)) ? 'is-seen' : ''}
+                    className={seenNames.has(cardKey(name)) ? 'is-seen' : ''}
                   />
                 ))}
               </span>

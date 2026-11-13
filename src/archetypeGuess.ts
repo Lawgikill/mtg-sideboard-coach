@@ -5,7 +5,8 @@
 // reimplemented here — see electron/cardMatching.cjs for why it lives there.
 
 import { containment } from '../electron/cardMatching.cjs'
-import type { Matchup } from './types'
+import { normalizeCardName } from './arena'
+import type { CardRecord, Matchup } from './types'
 
 // Events that show the opponent *owning* a card. Mill is excluded on its own: a
 // mill line is attributed to the card's owner, who is whoever is being milled.
@@ -28,6 +29,18 @@ const HIDDEN_ZONES = new Set(['hand', 'library'])
 // `card`, which is how every card an opponent discarded went unseen.
 const OWNED_LIST_KINDS = new Set(['discard', 'mill', 'select'])
 
+// The name a card is listed under: a multi-face card's front face, whichever face the
+// log named. MTGA names the face in play, so a prepared spell cast from exile read as
+// "Improvised Act", listed apart from the "Pompous Battlemage" it belongs to. The same
+// holds for an MDFC played as its land back or a creature that transformed. A name the
+// database lacks, or one that is the card's own full name, is left as it is.
+function listedName(name: string, cardByName: Map<string, CardRecord>): string {
+  const key = normalizeCardName(name)
+  const card = cardByName.get(key)
+  if (!card || card.isToken || !card.name.includes(' // ') || key === card.normalizedName) return name
+  return card.name.split(' // ')[0]
+}
+
 // Cards the opponent was seen to own during one game, with how many times each was
 // seen. Shared by the archetype guess and the on-screen game summary, so the two can
 // never disagree about what counts as "seen".
@@ -39,7 +52,11 @@ const OWNED_LIST_KINDS = new Set(['discard', 'mill', 'select'])
 //
 // The `source` is always excluded: it is appended to `cards` so attributions stay
 // hoverable, and it can belong to either player.
-export function observedCardsInGame(game: MtgaGame, localSeat: number | null): Map<string, number> {
+export function observedCardsInGame(
+  game: MtgaGame,
+  localSeat: number | null,
+  cardByName: Map<string, CardRecord>,
+): Map<string, number> {
   const seen = new Map<string, number>()
   if (localSeat == null) return seen
 
@@ -67,7 +84,7 @@ export function observedCardsInGame(game: MtgaGame, localSeat: number | null): M
         ? [part.card, ...(event.cards ?? [])].filter((name) => name && name !== event.source)
         : [part.card].filter(Boolean)
 
-      for (const name of owned as string[]) {
+      for (const name of (owned as string[]).map((each) => listedName(each, cardByName))) {
         seen.set(name, 1)
         if (part.fromZone && HIDDEN_ZONES.has(part.fromZone)) {
           copies.set(name, (copies.get(name) || 0) + 1)
@@ -84,13 +101,13 @@ export function observedCardsInGame(game: MtgaGame, localSeat: number | null): M
   return seen
 }
 
-export function observedOpponentCards(match: MtgaMatch): Map<string, number> {
+export function observedOpponentCards(match: MtgaMatch, cardByName: Map<string, CardRecord>): Map<string, number> {
   const seen = new Map<string, number>()
 
   for (const game of match.games) {
     // Highest count in any one game, never the sum across games: casting Opt in two
     // games is evidence of one or two copies, not four.
-    for (const [card, count] of observedCardsInGame(game, match.localSeat)) {
+    for (const [card, count] of observedCardsInGame(game, match.localSeat, cardByName)) {
       seen.set(card, Math.max(seen.get(card) || 0, count))
     }
   }
@@ -115,8 +132,12 @@ export type ArchetypeGuess = {
   cardsSeen: number
 }
 
-export function guessArchetype(match: MtgaMatch, matchups: Matchup[]): ArchetypeGuess | null {
-  const observed = observedOpponentCards(match)
+export function guessArchetype(
+  match: MtgaMatch,
+  matchups: Matchup[],
+  cardByName: Map<string, CardRecord>,
+): ArchetypeGuess | null {
+  const observed = observedOpponentCards(match, cardByName)
   if (observed.size === 0) return null
 
   const ranked = matchups

@@ -144,11 +144,15 @@ function boardedIn(
   const gameOne = match.games.find((entry) => entry.gameNumber === 1)
   if (game.gameNumber < 2 || !gameOne) return undefined
 
+  // Keyed by the card each name resolves to, not the name: a multi-face card is seen
+  // under its front face, while the list on file may hold the full "A // B" name.
+  const cardKey = (name: string) => cardByName.get(normalizeCardName(name))?.id ?? normalizeCardName(name)
+
   const quantities = (zone: string) => {
     const counts = new Map<string, number>()
     for (const entry of opponentEntries) {
       if (entry.zone !== zone) continue
-      const key = normalizeCardName(entry.name)
+      const key = cardKey(entry.name)
       counts.set(key, (counts.get(key) ?? 0) + entry.quantity)
     }
     return counts
@@ -160,18 +164,18 @@ function boardedIn(
   const complete = sideboardSize === COMPLETE_SIDEBOARD
 
   const seenEarlier = new Map<string, number>()
-  for (const [name, count] of observedCardsInGame(gameOne, match.localSeat)) {
-    seenEarlier.set(normalizeCardName(name), count)
+  for (const [name, count] of observedCardsInGame(gameOne, match.localSeat, cardByName)) {
+    seenEarlier.set(cardKey(name), count)
   }
 
   const cards: ReplayBoarded['cards'] = []
   let copies = 0
 
-  for (const [name, count] of observedCardsInGame(game, match.localSeat)) {
+  for (const [name, count] of observedCardsInGame(game, match.localSeat, cardByName)) {
     const card = cardByName.get(normalizeCardName(name))
     if (card?.isToken || isLand(card)) continue
 
-    const key = normalizeCardName(name)
+    const key = cardKey(name)
     // The higher of the two, not the sum: a list running 4 Forest against 2 seen in
     // game one still only accounts for 4.
     const known = Math.max(seenEarlier.get(key) ?? 0, complete ? main.get(key) ?? 0 : 0)
@@ -248,7 +252,7 @@ export function buildReplaySummaries(
     // Across the whole match the counts are the highest seen in any one game, never a
     // sum — two Opts in each of two games is evidence of two copies, not four.
     match: summaryOf(
-      observedOpponentCards(match),
+      observedOpponentCards(match, cardByName),
       `${match.opponent} showed, across ${match.games.length} games,`,
       cardByName,
     ),
