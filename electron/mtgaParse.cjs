@@ -356,21 +356,27 @@ class LogParser {
     return events.map((event) => {
       if (event.kind !== 'cast' && event.kind !== 'activate') return event
       const targets = event.targetLabels && event.targetLabels.length > 0
-      if (!targets && !event.paidCost && !event.altCost && !(event.modes && event.modes.length)) return event
+      const tapped = event.tappedFor && event.tappedFor.length > 0
+      if (!targets && !tapped && !event.paidCost && !event.altCost && !(event.modes && event.modes.length)) {
+        return event
+      }
 
       // Cost, then mode, then targets: the mode says what the targets are for. An
       // alternative cost replaces the mana cost, so it comes first ("for warp"); an
-      // additional one is paid on top ("with offspring").
+      // additional one is paid on top ("with offspring"). Permanents tapped to pay
+      // follow the cost they paid ("for harmonize, tapping Duelist of the Mind").
       const cost = `${event.altCost ? ` ${event.altCost}` : ''}${event.paidCost ? ` with ${event.paidCost}` : ''}`
+      const tapping = tapped ? `, tapping ${joinList(countedList(event.tappedFor))}` : ''
       const modes = event.modes && event.modes.length
         ? `, choosing ${joinList(event.modes.map((mode) => `"${mode}"`))}`
         : ''
-      if (!targets) return { ...event, text: `${event.text}${cost}${modes}` }
+      // Tapped and targeted permanents stay hoverable alongside the spell's own name.
+      const cards = [...(event.cards || []), ...(event.tappedFor || []), ...(targets ? event.targetCards || [] : [])]
+      if (!targets) return { ...event, text: `${event.text}${cost}${tapping}${modes}`, cards }
       return {
         ...event,
-        text: `${event.text}${cost}${modes}, targeting ${joinList(countedList(event.targetLabels))}`,
-        // Target names stay hoverable alongside the spell's own name.
-        cards: [...(event.cards || []), ...(event.targetCards || [])],
+        text: `${event.text}${cost}${tapping}${modes}, targeting ${joinList(countedList(event.targetLabels))}`,
+        cards,
       }
     })
   }
@@ -1443,6 +1449,21 @@ class LogParser {
 
     // actionType 1 is the player committing to the cast, the last step of casting —
     // everything emitted before it was cost payment.
+    // A permanent tapped to pay for a spell: harmonize, convoke. Taps are otherwise
+    // silent (150+ a match, nearly all mana), but this one's affector is the spell
+    // being cast rather than a mana ability, which marks it as a cost paid in
+    // permanents. Without it, Winternight Stories cast for harmonize said nothing of
+    // the 6-power Duelist of the Mind tapped to pay its {4}. Folded onto the cast line.
+    if (types.includes('AnnotationType_TappedUntappedPermanent') && details.tapped === 1 && this.game) {
+      const cast = [...this.game.events].reverse().find((event, index, all) =>
+        event.kind === 'cast' && event.instanceId === annotation.affectorId
+        && !all.slice(0, index).some((later) => later.kind === 'turn'))
+      if (cast) {
+        const names = (annotation.affectedIds || []).map((id) => this.nameOf(id)).filter(Boolean)
+        cast.tappedFor = [...(cast.tappedFor || []), ...names]
+      }
+    }
+
     if (types.includes('AnnotationType_UserActionTaken') && details.actionType === 1) {
       this.castingOpen = false
       // Cast for an alternative cost: warp, and the same field would carry evoke, dash
