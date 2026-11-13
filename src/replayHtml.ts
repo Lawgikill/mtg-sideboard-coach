@@ -273,7 +273,8 @@ h2 + .summary{margin-top:10px}
 .dl-cards{color:#c8d0d8;display:flex;flex:1 1 0;flex-wrap:wrap;font-size:13px;gap:4px 14px;min-width:0}
 .mana{font-style:italic}
 .unresolved{font-style:italic}
-.loggap{border-left:2px dashed #5a646e;font-size:12.5px;font-style:italic;padding-left:8px}
+.loggap{border-left:2px dashed #5a646e;font-size:12.5px;font-style:italic;margin-left:6px;padding-left:8px;
+        text-indent:0}
 .gameend{border-top:1px solid #2c343c;color:#e7e9ea;font-weight:700;letter-spacing:.04em;
          margin-top:10px;padding:10px 0 0;text-indent:0;text-transform:uppercase}
 /* Hover previews, CSS only. */

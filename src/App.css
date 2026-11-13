@@ -2342,13 +2342,18 @@ button:disabled {
 }
 
 /* Where MTGA left part of its log out. A statement about the record, not the game,
-   so it is set apart from the plays around it rather than read as one of them. */
+   so it is set apart from the plays around it rather than read as one of them.
+   No hanging indent: the -16px of .replay-event would pull the first line back across
+   the border. The border sits in the gutter instead (6 + 2 + 8 = 16px), so the text
+   still starts where every other line's does. */
 .replay-loggap {
   border-left: 2px dashed #5a646e;
   color: #8b97a3;
   font-size: 12.5px;
   font-style: italic;
+  margin-left: 6px;
   padding-left: 8px;
+  text-indent: 0;
 }
 
 /* Dotted rather than solid: it marks the name as inspectable without turning a line
