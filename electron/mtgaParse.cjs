@@ -1012,7 +1012,15 @@ class LogParser {
       this.attackState.set(id, object.attackState)
       if (object.attackState === 'AttackState_Declared') {
         const name = this.nameOf(id) || 'A creature'
-        const target = this.targetLabel(object.attackInfo ? object.attackInfo.targetId : null)
+        const targetId = object.attackInfo ? object.attackInfo.targetId : null
+        // What the defender stands at as the attack comes in: a player's life, or a
+        // planeswalker's loyalty — the number the attack is aimed at. Both are live
+        // values from the latest update; the damage line then says where it ended.
+        const isPlayer = targetId != null && this.seatNames[targetId] !== undefined
+        const loyalty = !isPlayer && targetId != null ? this.objectLoyalty.get(targetId) : null
+        const standing = isPlayer && this.life[targetId] != null ? ` (${this.life[targetId]} life)`
+          : loyalty && loyalty.value != null ? ` (${loyalty.value} loyalty)` : ''
+        const target = `${this.targetLabel(targetId)}${standing}`
         // Size at the moment of attacking. The combat damage line states it again as
         // damage is dealt, since a creature can grow in between (see DamageDealt) —
         // the two together show the growth.
