@@ -228,6 +228,11 @@ class LogParser {
     // instanceId -> { creature, onBattlefield } as last reported, to notice a permanent
     // that turns into a creature.
     this.objectShape = new Map()
+    // instanceId -> names of the cards that damaged it this turn, and the cards with a
+    // replacement effect in the message being read. Together they say which card
+    // exiled a creature instead of letting it die.
+    this.damagedBy = new Map()
+    this.replacementSources = new Set()
     // Ability instance -> the grpId of the card it came from.
     this.abilitySource = new Map()
     // Ability instance -> the instanceId of the permanent that created it.
@@ -736,6 +741,16 @@ class LogParser {
       for (const id of annotation.affectedIds || []) this.manaAbilities.add(id)
     }
 
+    // Cards with a replacement effect in force, collected before the annotations for the
+    // same reason: Torch the Tower's "exile it instead" arrives as a persistent
+    // annotation in the very message whose transfer it redirected.
+    this.replacementSources = new Set()
+    for (const annotation of state.persistentAnnotations || []) {
+      if (!(annotation.type || []).includes('AnnotationType_ReplacementEffect')) continue
+      const source = this.sourceOf(annotation.affectorId)
+      if (source) this.replacementSources.add(source)
+    }
+
     for (const annotation of state.annotations || []) this.handleAnnotation(annotation)
     this.noticeGrantedAbilities(state)
 
@@ -1103,6 +1118,7 @@ class LogParser {
     this.turn = turnInfo.turnNumber
     this.turnDrawSeen = false
     this.castingOpen = false
+    this.damagedBy = new Map()
     this.wardResolving = null
     this.abilityTargets = new Map()
     if (this.turn === 1) this.reportOpeningHands()
@@ -1235,6 +1251,9 @@ class LogParser {
       // Ownership never changes, so it follows the card like its name does.
       const owner = this.objectOwner.get(details.orig_id)
       if (owner != null) this.objectOwner.set(details.new_id, owner)
+      // The creature is renamed in the same message it dies, just before its transfer.
+      const damagedBy = this.damagedBy.get(details.orig_id)
+      if (damagedBy) this.damagedBy.set(details.new_id, damagedBy)
     }
 
     if (types.includes('AnnotationType_ZoneTransfer')) this.narrateZoneTransfer(annotation, details)
@@ -1496,8 +1515,39 @@ class LogParser {
           // counted as two copies.
           sourceInstance: annotation.affectorId,
         })
+        if (!hitsPlayer && source) {
+          const sources = this.damagedBy.get(targetId) || new Set()
+          sources.add(source)
+          this.damagedBy.set(targetId, sources)
+        }
       }
     }
+  }
+
+  // A death the rules sent somewhere other than the graveyard. The category says how
+  // it died (lethal damage, destruction, no loyalty) and the destination says where it
+  // went, and the two disagree whenever a replacement effect steps in: every creature
+  // Torch the Tower killed is an `SBA_Damage` transfer into exile, which read "dies".
+  //
+  // The cause is the card that both damaged it this turn and has a replacement effect
+  // in force in this message. The transfer itself names no affector, and the
+  // replacement's annotation points at the spell rather than its victim, so the two
+  // facts only meet here. Credited only when exactly one card fits; otherwise the line
+  // stands without a credit. A destroy names its own cause, which is used first.
+  narrateRedirectedDeath(instanceId, name, toKind, seat, instead, knownCause = null) {
+    const subject = name || 'a card'
+    const fits = [...(this.damagedBy.get(instanceId) || [])].filter((source) => this.replacementSources.has(source))
+    const cause = knownCause || (fits.length === 1 ? fits[0] : null)
+    const where = toKind === 'exile' ? 'is exiled' : `is put into ${toKind}`
+    const many = toKind === 'exile' ? 'are exiled' : `are put into ${toKind}`
+    return this.push('exile', `${subject} ${where} instead of ${instead}${cause ? ` (${cause})` : ''}`, {
+      fromZone: 'battlefield',
+      seat,
+      card: name,
+      source: cause,
+      subject,
+      predicate: { one: `${where} instead of ${instead}`, many: `${many} instead of ${instead}` },
+    })
   }
 
   narrateZoneTransfer(annotation, details) {
@@ -1570,6 +1620,9 @@ class LogParser {
       case 'Destroy':
       {
         const cause = this.causeOf(annotation, name)
+        if (toKind && toKind !== 'graveyard') {
+          return this.narrateRedirectedDeath(instanceId, name, toKind, seat, 'going to the graveyard', cause)
+        }
         const subject = this.nameOf(instanceId) || card
         return this.push('destroy', `${subject} is destroyed${cause ? ` (${cause})` : ''}`, {
           seat,
@@ -1667,6 +1720,9 @@ class LogParser {
       // state-based action, which fell through to the default and said nothing at
       // all. Combat deaths are not a detail to omit.
       case 'SBA_Damage':
+        if (toKind && toKind !== 'graveyard') {
+          return this.narrateRedirectedDeath(instanceId, name, toKind, seat, 'dying')
+        }
         return this.push('destroy', `${this.nameOf(instanceId) || card} dies`, { seat, card: name })
 
       // An aura or equipment falling off because what it was attached to left.
@@ -1679,6 +1735,9 @@ class LogParser {
       // stopped being mentioned. Named rather than called "dies", which is a
       // creature's word.
       case 'SBA_ZeroLoyalty':
+        if (toKind && toKind !== 'graveyard') {
+          return this.narrateRedirectedDeath(instanceId, name, toKind, seat, 'going to the graveyard')
+        }
         return this.push('destroy', `${card} is put into the graveyard with no loyalty left`,
           { seat, card: name })
 
