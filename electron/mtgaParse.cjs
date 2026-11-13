@@ -207,6 +207,9 @@ class LogParser {
     this.manaAbilities = new Set()
     // Permanents whose counters change in the message being handled.
     this.counterTargets = new Set()
+    // The latest card put from a library outside a search, until a shuffle by the same
+    // effect closes it.
+    this.lastLibraryPut = null
     // True from a card reaching the stack until its cast is committed.
     this.castingOpen = false
     // instanceId -> grpId. Objects are renumbered as they change zones, so this has
@@ -1155,6 +1158,7 @@ class LogParser {
     this.turn = turnInfo.turnNumber
     this.turnDrawSeen = false
     this.castingOpen = false
+    this.lastLibraryPut = null
     this.damagedBy = new Map()
     this.wardResolving = null
     this.abilityTargets = new Map()
@@ -1280,7 +1284,18 @@ class LogParser {
     }
 
     // Shuffling is how a search ends, so that is when the line can state a total.
-    if (types.includes('AnnotationType_Shuffle')) this.concludeSearch()
+    if (types.includes('AnnotationType_Shuffle')) {
+      // A shuffle by the very effect that just put a card from the library: the log
+      // links the two through the shared affector, so the line can say it.
+      const put = this.lastLibraryPut
+      if (!this.pendingSearch && put && put.affectorId != null && put.affectorId === annotation.affectorId) {
+        put.event.shuffled = true
+        const credit = put.event.source ? ` (${put.event.source})` : ''
+        put.event.text = `${put.event.text.slice(0, put.event.text.length - credit.length)} and shuffles${credit}`
+      }
+      this.lastLibraryPut = null
+      this.concludeSearch()
+    }
 
     if (types.includes('AnnotationType_ObjectIdChanged')) {
       const grpId = this.objectGrp.get(details.orig_id)
@@ -1864,6 +1879,21 @@ class LogParser {
         else if (fromKind !== toKind) destination = `into their ${toKind || 'library'}`
         if (!destination) return undefined
 
+        // How it arrived is part of where it went, so it rides in `destination` and
+        // survives the run merge; read off the object as a land play's is.
+        if (toKind === 'battlefield' && this.objectTapped.get(instanceId)) destination += ' tapped'
+
+        // Where it came from, for a permanent put onto the battlefield. "Tropical Taco
+        // puts Mountain onto the battlefield" read as if from hand, when The Naked Time
+        // and Erode had fetched it from the library. Only the zones are stated — the
+        // opponent's search itself never reaches this client (`searchReq` goes to the
+        // searcher alone), so their line does not claim a search. Kept apart from
+        // `destination` so our own search line, which already says "searches their
+        // library", does not repeat it.
+        const origin = toKind === 'battlefield' && fromKind && fromKind !== 'battlefield'
+          ? (fromKind === 'exile' ? ' from exile' : ` from their ${fromKind}`)
+          : ''
+
         const cause = this.causeOf(annotation, name)
         // Anything leaving the library during a search is what it found, wherever it
         // went. Counting only cards put into hand made every search that puts its find
@@ -1876,13 +1906,21 @@ class LogParser {
           // Held so the search line can absorb these rather than repeat them.
           this.pendingSearch.absorbed.push(this.game.events.length)
         }
-        return this.push('select', `${who} puts ${card} ${destination}${cause ? ` (${cause})` : ''}`, {
+        this.push('select', `${who} puts ${card}${origin} ${destination}${cause ? ` (${cause})` : ''}`, {
           seat,
           card: name,
           destination,
+          origin,
           source: cause,
           fromZone: fromKind,
         })
+        // Held for a shuffle by the same effect (see Shuffle), which is how the
+        // opponent's fetch reads as finishing: "… onto the battlefield tapped and
+        // shuffles". Ours is a search, which the shuffle concludes instead.
+        if (!this.pendingSearch && fromKind === 'library') {
+          this.lastLibraryPut = { event: this.game.events[this.game.events.length - 1], affectorId: annotation.affectorId }
+        }
+        return undefined
       }
 
       default:
@@ -2605,13 +2643,18 @@ function selectDescriber(run) {
   const cause = sources.size === 1 ? [...sources][0] : null
   const credit = cause ? ` (${cause})` : ''
   const cards = run.map((entry) => entry.card).filter(Boolean)
+  // Carried across like the cause: where the cards came from, said once when they
+  // share it, and the shuffle that closed the effect.
+  const origins = new Set(run.map((entry) => entry.origin || ''))
+  const origin = origins.size === 1 ? [...origins][0] : ''
+  const shuffled = run.some((entry) => entry.shuffled) ? ' and shuffles' : ''
 
   if (destinations.size === 1) {
     const labels = cardLabels(run.map((entry) => entry.card), run.length)
     return {
       turn: run[0].turn,
       kind: 'select',
-      text: `${who} puts ${joinList(labels)} ${run[0].destination}${credit}`,
+      text: `${who} puts ${joinList(labels)}${origin} ${run[0].destination}${shuffled}${credit}`,
       seat: run[0].seat,
       card: null,
       cards,
@@ -2621,11 +2664,11 @@ function selectDescriber(run) {
     }
   }
 
-  const fragments = run.map((entry) => `${entry.card || 'a card'} ${entry.destination}`)
+  const fragments = run.map((entry) => `${entry.card || 'a card'}${entry.origin || ''} ${entry.destination}`)
   return {
     turn: run[0].turn,
     kind: 'select',
-    text: `${who} puts ${joinList(fragments)}${credit}`,
+    text: `${who} puts ${joinList(fragments)}${shuffled}${credit}`,
     seat: run[0].seat,
     card: null,
     cards,
