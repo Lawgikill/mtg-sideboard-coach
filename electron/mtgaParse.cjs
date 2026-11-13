@@ -412,7 +412,8 @@ class LogParser {
   // Worth stating even when nothing was taken: a search that found nothing useful
   // is otherwise completely invisible — the permanent resolves and the narration
   // simply moves on.
-  concludeSearch() {
+  // `shuffledBy` is the affector of the Shuffle that ended the search, when one did.
+  concludeSearch(shuffledBy = null) {
     const search = this.pendingSearch
     this.pendingSearch = null
     if (!search || !this.game) return
@@ -447,7 +448,12 @@ class LogParser {
     this.game.events.splice(search.at, 0, {
       turn: this.turn,
       kind: 'search',
-      text: `${this.seatLabel(search.seat)} searches their library and ${verb}${taken}${credit}`,
+      // "and shuffles" when the log shows the search's own source shuffling the library
+      // — the same instance the request named — as the opponent's fetch lines say it.
+      // After a list of cards it takes a comma, as "bottoms A and B, and keeps 5" does,
+      // so it cannot read as one more card found.
+      text: `${this.seatLabel(search.seat)} searches their library and ${verb}${taken}`
+        + `${shuffledBy != null && shuffledBy === search.sourceId ? `${taken ? ',' : ''} and shuffles` : ''}${credit}`,
       seat: search.seat,
       source: search.source,
       cards: named,
@@ -653,6 +659,7 @@ class LogParser {
       this.pendingSearch = {
         seat: (message.systemSeatIds || [])[0],
         source: this.sourceOf(message.searchReq.sourceId),
+        sourceId: message.searchReq.sourceId,
         candidates: (message.searchReq.itemsSought || []).length,
         taken: 0,
         cards: [],
@@ -1368,7 +1375,7 @@ class LogParser {
         put.event.text = `${put.event.text.slice(0, put.event.text.length - credit.length)} and shuffles${credit}`
       }
       this.lastLibraryPut = null
-      this.concludeSearch()
+      this.concludeSearch(annotation.affectorId)
     }
 
     if (types.includes('AnnotationType_ObjectIdChanged')) {
