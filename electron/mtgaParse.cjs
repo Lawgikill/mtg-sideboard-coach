@@ -1923,19 +1923,30 @@ class LogParser {
       case 'Return':
       {
         const cause = this.causeOf(annotation, name)
+        // A creature leaving the battlefield shows its last size there; one arriving on
+        // it shows the size it arrived at, like any creature on the battlefield.
         const subject = fromKind === 'battlefield'
           ? this.sizedDeparted(instanceId, this.nameOf(instanceId) || card)
-          : this.nameOf(instanceId) || card
-        const where = toKind || 'another zone'
+          : toKind === 'battlefield'
+            ? this.sized(instanceId, this.nameOf(instanceId) || card)
+            : this.nameOf(instanceId) || card
+        const where = toKind === 'battlefield' ? 'the battlefield' : toKind || 'another zone'
         const owner = this.zoneOwner(details.zone_src)
         const origin = departureZone(fromKind, owner, this.seatLabel(owner))
-        return this.push('return', `${subject} returns to ${where}${origin}${cause ? ` (${cause})` : ''}`, {
+        this.push('return', `${subject} returns to ${where}${origin}${cause ? ` (${cause})` : ''}`, {
           seat,
           card: name,
           source: cause,
           subject,
           predicate: { one: `returns to ${where}${origin}`, many: `return to ${where}${origin}` },
         })
+        // Arriving tapped is said for a return as for a resolving spell: Duelist of the
+        // Mind came back from Sheltered by Ghosts' exile tapped under Authority of the
+        // Consuls, and was the one creature entering under it with nothing saying so.
+        if (toKind === 'battlefield' && this.objectTapped.get(instanceId)) {
+          this.push('tapped', `${subject} enters tapped`, { seat, card: name })
+        }
+        return undefined
       }
       // A spell that leaves the stack with no category and no ResolutionStart never
       // resolved. MTGA writes the category as the literal string "nil".
