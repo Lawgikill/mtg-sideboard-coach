@@ -182,6 +182,9 @@ class LogParser {
     this.objectGrp = new Map()
     // instanceId -> controlling seat, so a token can be attributed to its owner.
     this.objectController = new Map()
+    // instanceId -> owning seat. The fallback for a zone transfer between two shared
+    // zones (exile, stack, battlefield), none of which has an owner of its own.
+    this.objectOwner = new Map()
     // Enough state to answer "what mana is the other player holding up".
     this.objectTypes = new Map()
     this.objectZone = new Map()
@@ -588,6 +591,7 @@ class LogParser {
       if (object.instanceId == null) continue
       if (object.grpId) this.objectGrp.set(object.instanceId, object.grpId)
       if (object.controllerSeatId != null) this.objectController.set(object.instanceId, object.controllerSeatId)
+      if (object.ownerSeatId != null) this.objectOwner.set(object.instanceId, object.ownerSeatId)
       if (object.cardTypes) this.objectTypes.set(object.instanceId, object.cardTypes)
       if (object.zoneId != null) this.objectZone.set(object.instanceId, object.zoneId)
       // Presence in a message makes the value authoritative, and an omitted boolean
@@ -743,6 +747,7 @@ class LogParser {
       // Object ids and turn counters restart with each game.
       this.objectGrp = new Map()
       this.objectController = new Map()
+      this.objectOwner = new Map()
       this.objectTypes = new Map()
       this.objectZone = new Map()
       this.objectTapped = new Map()
@@ -1114,6 +1119,9 @@ class LogParser {
     if (types.includes('AnnotationType_ObjectIdChanged')) {
       const grpId = this.objectGrp.get(details.orig_id)
       if (grpId) this.objectGrp.set(details.new_id, grpId)
+      // Ownership never changes, so it follows the card like its name does.
+      const owner = this.objectOwner.get(details.orig_id)
+      if (owner != null) this.objectOwner.set(details.new_id, owner)
     }
 
     if (types.includes('AnnotationType_ZoneTransfer')) this.narrateZoneTransfer(annotation, details)
@@ -1373,7 +1381,15 @@ class LogParser {
     const toKind = this.zoneKind(details.zone_dest)
     // Who the card belongs to, which is more reliable than the affector: a draw has
     // no affector, and removal is attributed to the spell, not its controller.
-    const seat = this.zoneOwner(details.zone_dest) ?? this.zoneOwner(details.zone_src) ?? annotation.affectorId
+    //
+    // Exile, stack and battlefield are shared zones with no owner, so a transfer
+    // between two of them — a warp spell recast from exile, a creature dying into
+    // exile — falls to the object's own owner. The affector is never a fallback: it
+    // was, and a warp recast narrated as "Seat 483 casts Nova Hellkite", while a
+    // combat death into exile came out with no seat at all — and the summary, which
+    // excludes only the local seat, listed both as the opponent's cards.
+    const seat = this.zoneOwner(details.zone_dest) ?? this.zoneOwner(details.zone_src)
+      ?? this.objectOwner.get(instanceId) ?? null
     const who = this.seatLabel(seat)
     // Opponent cards stay hidden until revealed, so an unnamed object is expected
     // rather than a parse failure.

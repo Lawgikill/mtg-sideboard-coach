@@ -58,7 +58,10 @@ export function observedCardsInGame(game: MtgaGame, localSeat: number | null): M
     for (const part of parts) {
       const kind = part.kind ?? event.kind
       if (!OWNERSHIP_KINDS.has(kind)) continue
-      if (part.seat === localSeat) continue
+      // An unknown seat is not evidence of the opponent. Excluding only the local
+      // seat let seatless lines through, which is how the player's own creatures,
+      // dying into exile, were listed among what the opponent showed.
+      if (part.seat == null || part.seat === localSeat) continue
 
       const owned = OWNED_LIST_KINDS.has(kind)
         ? [part.card, ...(event.cards ?? [])].filter((name) => name && name !== event.source)
