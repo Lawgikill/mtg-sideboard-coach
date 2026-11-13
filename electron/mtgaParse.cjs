@@ -1353,7 +1353,7 @@ class LogParser {
         // removed down to none has no annotation left to report it, so says nothing.
         const countAfter = this.counterTotals.get(`${id}:${details.counter_type}`)
 
-        this.push('counter', counterPhrase([target], added, amount, kind, source, countAfter), {
+        this.push('counter', counterPhrase([{ name: target, total: countAfter }], added, amount, kind, source), {
           seat: this.objectController.get(id),
           card: target,
           added,
@@ -2452,14 +2452,30 @@ function mergeResolveAttach(events) {
 
 // One phrasing for a counter line, so a single creature and a merged run cannot
 // drift apart. "a +1/+1 counter" rather than "1 counter" reads as English.
-function counterPhrase(targets, added, amount, kind, source, countAfter) {
-  const subject = joinList(countedList(targets))
-  // A Saga's lore count is its chapter, and the chapter is the point of the line: two
-  // Sagas ticking up together, one to chapter III and one to II, merged into "2 The
-  // Naked Time get a Lore counter" and hid which was which. Shown for lore alone —
-  // elsewhere the running count is not what the line is read for.
+//
+// `entries` are `{ name, total }`: each permanent and the count of that kind it was
+// left with. The total is what a counter line is usually read for — a creature's
+// +1/+1 counters are its size, a planeswalker's loyalty its distance from an ultimate,
+// and a Saga's lore count its chapter, which is how two Sagas ticking up together,
+// one to III and one to II, had merged into "2 The Naked Time get a Lore counter" and
+// hidden which was which. One permanent states it after the counter ("loses a +1/+1
+// counter (now 2)"); a list states it after each name, so a run need not split for
+// its permanents to differ ("Nova Hellkite (now 2) and Starfield Shepherd (now 1) get
+// a +1/+1 counter"). A count removed down to none has no total in the log — the
+// running count is deleted rather than reported as 0 — so says nothing.
+function counterPhrase(entries, added, amount, kind, source) {
+  const single = entries.length === 1
+  const label = (entry) => (entry.total != null ? `${entry.name} (now ${entry.total})` : entry.name)
+  const subject = single ? entries[0].name : joinList(countedList(entries.map(label)))
+  const countAfter = single ? entries[0].total : null
   const lore = kind === 'Lore' && countAfter != null
-  const total = lore ? ` (now ${countAfter})` : ''
+  // A permanent's first counters of a kind already say how many it has: "gets 3 +1/+1
+  // counters (now 3)" restated the line, and stacked a second parenthetical beside the
+  // credit on every first Stun or +1/+1 counter. Lore keeps it — chapter I is a
+  // chapter — and so does a list, where every name carries one.
+  const fresh = added && countAfter === amount && !lore
+  const total = countAfter != null && !fresh ? ` (now ${countAfter})` : ''
+  const targets = entries.map((entry) => entry.name)
   // The source is named even when it is the target. It reads redundantly in
   // isolation, but a counter a permanent puts on or takes off itself is the cost or
   // effect of its own ability, and naming it is what ties the line to the other
@@ -2489,11 +2505,13 @@ function sameCounter(a, b) {
 }
 
 function counterDescriber(run) {
-  const targets = run.map((entry) => entry.card).filter(Boolean)
+  const named = run.filter((entry) => entry.card)
+  const targets = named.map((entry) => entry.card)
+  const entries = named.map((entry) => ({ name: entry.card, total: entry.countAfter }))
   return {
     turn: run[0].turn,
     kind: 'counter',
-    text: counterPhrase(targets, run[0].added, run[0].amount, run[0].counterKind, run[0].source, run[0].countAfter),
+    text: counterPhrase(entries, run[0].added, run[0].amount, run[0].counterKind, run[0].source),
     seat: run[0].seat,
     card: null,
     cards: targets,
@@ -2633,7 +2651,11 @@ function sharedOpening(first, second, names = []) {
   // Only clauses that *begin* with a card name can be cut into one: "draws Forest"
   // beside "draws Forest Tentacle" opens with the verb, so it is unaffected.
   const splitsName = names.some((name) => second.startsWith(name) && opening.length < name.length)
-  return splitsName ? '' : opening
+  // Nor inside a parenthetical: two counter lines on one permanent share everything up
+  // to "(now", and dropping that much left "… (now 3) and 2)".
+  const opens = (opening.match(/\(/g) || []).length
+  const closes = (opening.match(/\)/g) || []).length
+  return splitsName || opens > closes ? '' : opening
 }
 
 // A granted keyword merges only into a line about the same permanent: "Quantum
