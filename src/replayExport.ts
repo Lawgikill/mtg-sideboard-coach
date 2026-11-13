@@ -124,6 +124,13 @@ export function summaryCardLabel(name: string, count: number): string {
   return count > 1 ? `${count} ${name}` : name
 }
 
+// A sideboarding list always states the count, 1 included ("1 Nova Hellkite"): a
+// plan is read as quantities in and out, and a bare name sitting among "2 Negate"
+// reads as uncounted rather than as one.
+export function boardCardLabel(name: string, count: number): string {
+  return `${count} ${name}`
+}
+
 // Cards seen in this game beyond what was already known to be in their deck.
 //
 // The two cases differ only in the baseline:
@@ -223,7 +230,7 @@ export function gameNotesFromReplay(
   includeOwnBoarding: boolean,
 ): string {
   const list = (cards: Array<{ name: string; count: number }>) =>
-    cards.map((card) => summaryCardLabel(card.name, card.count)).join('; ')
+    cards.map((card) => boardCardLabel(card.name, card.count)).join('; ')
 
   const lines: string[] = []
 
@@ -284,7 +291,7 @@ function summaryLines(summary: ReplaySummary, indent: string): string[] {
     lines.push(
       `${indent}${summary.boarded.label}`,
       ...summary.boarded.cards.map((entry) => `${indent}  ${
-        summaryCardLabel(entry.name, entry.count)
+        boardCardLabel(entry.name, entry.count)
       }${entry.unlisted ? ' *' : ''}`),
       // The basis is a tooltip on screen; a file has no hover, so it prints here.
       `${indent}  ${[summary.boarded.basis, summary.boarded.note].filter(Boolean).join(' · ')}`,
@@ -304,7 +311,7 @@ function boardingLines(game: MtgaGame, indent: string): string[] {
     const copies = cards.reduce((sum, card) => sum + card.count, 0)
     return [
       `${indent}${label} — ${copies} card${copies === 1 ? '' : 's'}:`,
-      ...cards.map((card) => `${indent}  ${summaryCardLabel(card.name, card.count)}`),
+      ...cards.map((card) => `${indent}  ${boardCardLabel(card.name, card.count)}`),
     ]
   }
 

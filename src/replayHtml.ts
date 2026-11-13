@@ -10,7 +10,7 @@
 
 import type { CardRecord } from './types'
 import { normalizeCardName } from './arena'
-import { formatMatchFormat, matchRecord, opponentLabel, summaryCardLabel, tokenPreviewAt } from './replayExport'
+import { boardCardLabel, formatMatchFormat, matchRecord, opponentLabel, summaryCardLabel, tokenPreviewAt } from './replayExport'
 import type { ReplayDecklist, ReplayExtras, ReplaySummary } from './replayExport'
 
 const KIND_COLORS: Record<string, string> = {
@@ -122,7 +122,7 @@ function renderSummary(
       escapeHtml(summary.boarded.label)
     }</span>${renderText(
       summary.boarded.cards
-        .map((entry) => `${summaryCardLabel(entry.name, entry.count)}${entry.unlisted ? ' *' : ''}`)
+        .map((entry) => `${boardCardLabel(entry.name, entry.count)}${entry.unlisted ? ' *' : ''}`)
         .join('; '),
       summary.boarded.cards.map((entry) => entry.name),
       cardByName,
@@ -177,7 +177,7 @@ function renderBoarding(
     return `<span class="summary-label">${escapeHtml(`${label} — ${copies} card${
       copies === 1 ? '' : 's'
     }`)}</span>${renderText(
-      cards.map((card) => summaryCardLabel(card.name, card.count)).join('; '),
+      cards.map((card) => boardCardLabel(card.name, card.count)).join('; '),
       cards.map((card) => card.name),
       cardByName,
     )}`

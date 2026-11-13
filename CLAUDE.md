@@ -514,10 +514,12 @@ Two entry points, one direction of data. The Replay tab's **To Journal** button 
 **Notes arrive pre-filled with the two prompts the log can answer**, numbered to match `JOURNAL_NOTES_PROMPTS` rather than by position — `Q1. What did you board in/out?` and `Q2. What did you see them board in?`:
 
 ```
-1: IN: Dawn's Truce; Get Lost; 2 Origin of Metalbending; 3 Seam Rip
+1: IN: 1 Dawn's Truce; 1 Get Lost; 2 Origin of Metalbending; 3 Seam Rip
 OUT: 2 Bejeweled Warg; 2 Llanowar Elves; 3 Tender Wildguide
-2: Possibly boarded in: Flow State; Glacierwood Siege; Sleight of Hand; Stock Up
+2: Possibly boarded in: 1 Flow State; 1 Glacierwood Siege; 1 Sleight of Hand; 1 Stock Up
 ```
+
+**Every sideboarding list states its counts, 1 included** (`boardCardLabel`): ours on screen and in both exports, the opponent's "Possibly boarded in" block, and these Journal notes. A plan is read as quantities in and out, and a bare name among `2 Negate` reads as uncounted rather than as one. The "what they showed" summary and the decklist keep `summaryCardLabel`, which drops a count of 1.
 
 Because the numbering is the prompt's, **`2:` keeps its number when `1:` is switched off**, and line 1 is omitted entirely rather than renumbered. `OUT:` sits on its own line without a number: a sideboard plan reads as a pair, and running both halves together makes neither scannable. Game one gets blank notes, having no boarding of either kind. Every other prompt is left for the player — the replay records what happened, the journal is for what you thought about it.
 

@@ -45,7 +45,7 @@ import 'mana-font/css/mana.css'
 import './App.css'
 import { createId, inferDeckColorProfile, normalizeCardName, parseArenaDecklist, serializeArenaDecklist } from './arena'
 import { buildJournalText, inferGameStart, JOURNAL_NOTES_PROMPTS, summarizeJournal, UNSPECIFIED_OPPONENT } from './journalExport'
-import { buildReplaySummaries, buildReplayText, gameNotesFromReplay, describeEndReason, describeStart, formatMatchFormat, matchRecord, opponentLabel, replayFileName, summaryCardLabel, tokenPreviewAt } from './replayExport'
+import { boardCardLabel, buildReplaySummaries, buildReplayText, gameNotesFromReplay, describeEndReason, describeStart, formatMatchFormat, matchRecord, opponentLabel, replayFileName, summaryCardLabel, tokenPreviewAt } from './replayExport'
 import type { ReplayDecklist, ReplaySummary } from './replayExport'
 import { buildReplayHtml } from './replayHtml'
 import { buildZip, uniqueNames } from './zip'
@@ -3161,7 +3161,7 @@ function OpponentSummary({ summary, cardByName, className = '' }: {
             {summary.boarded.cards.map((entry) => (
               <ReplayCardName
                 key={entry.name}
-                name={`${summaryCardLabel(entry.name, entry.count)}${entry.unlisted ? ' *' : ''}`}
+                name={`${boardCardLabel(entry.name, entry.count)}${entry.unlisted ? ' *' : ''}`}
                 card={cardByName.get(normalizeCardName(entry.name))}
                 className={entry.unlisted ? 'is-unlisted' : ''}
               />
@@ -3302,7 +3302,7 @@ function MySideboarding({ game, cardByName }: {
           {cards.map((card) => (
             <ReplayCardName
               key={card.name}
-              name={summaryCardLabel(card.name, card.count)}
+              name={boardCardLabel(card.name, card.count)}
               card={cardByName.get(normalizeCardName(card.name))}
             />
           ))}
