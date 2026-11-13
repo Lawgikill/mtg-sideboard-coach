@@ -1017,8 +1017,8 @@ class LogParser {
   // show up the same way — as the number next to the name. The size is the creature's
   // after this message, since the log reports the state each update ends in.
   //
-  // `anyZone` lets a spell on the stack report the size it was cast at (Guiding Hydra
-  // is 1/0 there, 4/3 once it resolves with its counters in the same update).
+  // `anyZone` skips the battlefield check, for a card that has just left it (see
+  // sizedDeparted).
   sizeOf(instanceId, anyZone = false) {
     if (instanceId == null) return ''
     if (!(this.objectTypes.get(instanceId) || []).includes('CardType_Creature')) return ''
@@ -1304,7 +1304,7 @@ class LogParser {
   reportResolve(instanceId) {
     const name = this.nameOf(instanceId)
     if (!name) return
-    this.push('resolve', `${this.sized(instanceId, name, true)} resolves`, {
+    this.push('resolve', `${this.sized(instanceId, name)} resolves`, {
       seat: this.objectController.get(instanceId),
       card: name,
     })
@@ -1795,9 +1795,7 @@ class LogParser {
         // spell is a copy of the card's other half, kept in exile, so "casts
         // Improvised Act from exile" read as if the card itself had been exiled.
         const isCopy = this.objectCopies.has(instanceId)
-        // A creature spell carries the size it was cast at, read off the stack object.
-        const sizedCard = name ? this.sized(instanceId, name, true) : card
-        const what = isCopy ? `a copy of ${sizedCard}` : sizedCard
+        const what = isCopy ? `a copy of ${card}` : card
         // The card it is a copy of, which the log names (`parentId`). Credited at the
         // end of the line once every merge has run (see finish), so it lands after
         // any targets or choices rather than in the middle of them.
@@ -1805,6 +1803,8 @@ class LogParser {
         const copyOf = parent != null ? this.nameOf(parent) : null
         this.push('cast', `${who} casts ${what}${origin}`, {
           seat, card: name, instanceId, fromZone: fromKind, copyOf: copyOf || undefined,
+          // Kept so the size can be put beside the name once the permanent arrives.
+          castParts: { who, what, origin },
         })
         this.castingOpen = true
         return undefined
@@ -1819,6 +1819,21 @@ class LogParser {
       // such as Authority of the Consuls', which no annotation links to the creature,
       // and the owner chose not to have it inferred from what is on the battlefield.
       case 'Resolve':
+        // A creature spell's cast line takes the size it entered at, as the log
+        // reports it on arrival. Not the size it was cast at: Guiding Hydra was 1/0 on
+        // the stack and arrived 4/3 with its X counters in the same update, and the
+        // owner wants what the log shows it coming in as. A creature that never
+        // resolves gets no size at all.
+        if (toKind === 'battlefield' && this.game) {
+          const size = this.sizeOf(instanceId)
+          const cast = size && [...this.game.events].reverse().find((event, index, all) =>
+            event.kind === 'cast' && event.instanceId === instanceId && event.castParts
+            && !all.slice(0, index).some((later) => later.kind === 'turn'))
+          if (cast) {
+            const { who: caster, what, origin } = cast.castParts
+            cast.text = `${caster} casts ${what}${size}${origin}`
+          }
+        }
         if (toKind === 'battlefield' && this.objectTapped.get(instanceId)) {
           return this.push('tapped', `${name ? this.sized(instanceId, name) : card} enters tapped`, { seat, card: name })
         }
