@@ -205,6 +205,8 @@ class LogParser {
     this.pendingSearch = null
     // Ability instances in the message being handled that are mana abilities.
     this.manaAbilities = new Set()
+    // Permanents whose counters change in the message being handled.
+    this.counterTargets = new Set()
     // True from a card reaching the stack until its cast is committed.
     this.castingOpen = false
     // instanceId -> grpId. Objects are renumbered as they change zones, so this has
@@ -754,6 +756,15 @@ class LogParser {
       for (const id of annotation.affectedIds || []) this.manaAbilities.add(id)
     }
 
+    // Permanents whose counters change in this message. A +1/+1 counter also produces
+    // a PowerToughnessModCreated, and the counter already has its own line.
+    this.counterTargets = new Set()
+    for (const annotation of state.annotations || []) {
+      const types = annotation.type || []
+      if (!types.includes('AnnotationType_CounterAdded') && !types.includes('AnnotationType_CounterRemoved')) continue
+      for (const id of annotation.affectedIds || []) this.counterTargets.add(id)
+    }
+
     // Cards with a replacement effect in force, collected before the annotations for the
     // same reason: Torch the Tower's "exile it instead" arrives as a persistent
     // annotation in the very message whose transfer it redirected.
@@ -986,13 +997,11 @@ class LogParser {
       if (object.attackState === 'AttackState_Declared') {
         const name = this.nameOf(id) || 'A creature'
         const target = this.targetLabel(object.attackInfo ? object.attackInfo.targetId : null)
-        // Size at the moment of attacking, which is when it decides anything. Combat
-        // is the one place P/T earns a mention, and here it adds no extra line.
-        const stats = this.statsLabel(id)
-        this.push('attack', `${name}${stats ? ` ${stats}` : ''} attacks ${target}`, {
+        // No size here: it goes on the combat damage line instead (see DamageDealt),
+        // because a creature can grow between declaring and dealing damage.
+        this.push('attack', `${name} attacks ${target}`, {
           seat: object.controllerSeatId,
           card: this.nameOf(id),
-          stats,
           targetId: object.attackInfo ? object.attackInfo.targetId : null,
           targetLabel: target,
         })
@@ -1524,6 +1533,33 @@ class LogParser {
       }
     }
 
+    // A power/toughness change: prowess, a pump spell. Pompous Battlemage's prowess
+    // triggered after blockers, and nothing said so — the damage it dealt simply did
+    // not match its size on the attack line. The affector is the ability or spell
+    // that did it. A keyword ability on the creature itself reads "from prowess";
+    // anything else is credited, the creature itself included — Momo pumping itself
+    // through its own trigger otherwise read as a pump from nowhere, and a counter line
+    // names its own card for the same reason. The size after is read off the object,
+    // which this message has already updated. Skipped when the change is a counter's,
+    // which has its own line.
+    if (types.includes('AnnotationType_PowerToughnessModCreated')) {
+      const signed = (value) => (value < 0 ? String(value) : `+${value || 0}`)
+      for (const id of annotation.affectedIds || []) {
+        const target = this.nameOf(id)
+        if (!target || this.counterTargets.has(id)) continue
+        const keyword = keywordText(this.resolveAbilityText(this.objectGrp.get(annotation.affectorId)))
+        const source = this.sourceOf(annotation.affectorId)
+        const fromKeyword = Boolean(keyword) && source === target
+        const how = fromKeyword ? ` from ${keyword}` : ''
+        const credit = source && !fromKeyword ? source : null
+        const stats = this.statsLabel(id).replace(/^\(/, '(now ')
+        this.push('pump',
+          `${target} gets ${signed(details.power)}/${signed(details.toughness)}${how}${stats ? ` ${stats}` : ''}`
+            + `${credit ? ` (${credit})` : ''}`,
+          { seat: this.objectController.get(id), card: target, source: credit })
+      }
+    }
+
     if (types.includes('AnnotationType_DamageDealt')) {
       const source = this.nameOf(annotation.affectorId)
       const amount = details.damage
@@ -1533,10 +1569,17 @@ class LogParser {
         const hitsPlayer = this.seatNames[targetId] !== undefined
         const targetName = hitsPlayer ? null : this.nameOf(targetId)
         const target = hitsPlayer ? this.seatLabel(targetId) : (targetName || 'a permanent')
-        this.push('damage', `${source || 'Something'} deals ${amount} damage to ${target}`, {
+        // A creature's size as it deals combat damage (`type` 1; a ping or a burn
+        // spell is 2), which is when size decides anything. It used to ride on the
+        // attack line, but creatures grow mid-combat: Pompous Battlemage's prowess
+        // triggered after blockers and Duelist of the Mind drew off a crime, so the
+        // attack line summed to 11 over 13 damage. Here the sizes add up to the damage.
+        const stats = details.type === 1 ? this.statsLabel(annotation.affectorId) : ''
+        this.push('damage', `${source || 'Something'}${stats ? ` ${stats}` : ''} deals ${amount} damage to ${target}`, {
           amount,
           targetId,
           card: source,
+          stats,
           targetLabel: target,
           // The target is hoverable too; only the source was before.
           cards: [source, targetName].filter(Boolean),
@@ -2383,11 +2426,7 @@ function sameTargetOnce(hit, first, run) {
 
 function attackDescriber(run) {
   const names = run.map((entry) => entry.card).filter(Boolean)
-  // Each attacker keeps its own size. Counting runs on name *and* size, so two
-  // identical Llanowar Elves read "2 Llanowar Elves (1/1)" while a pumped one stays
-  // separate.
-  const labels = run.map((entry) => (entry.card ? `${entry.card}${entry.stats ? ` ${entry.stats}` : ''}` : null))
-  const subject = names.length === run.length ? joinList(countedList(labels)) : `${run.length} creatures`
+  const subject = names.length === run.length ? joinList(countedList(names)) : `${run.length} creatures`
   return {
     turn: run[0].turn,
     kind: 'attack',
@@ -2403,7 +2442,11 @@ function attackDescriber(run) {
 
 function damageDescriber(run) {
   const names = run.map((entry) => entry.card).filter(Boolean)
-  const subject = names.length === run.length ? joinList(countedList(names)) : `${run.length} sources`
+  // Each creature keeps its own size. Counting runs on name *and* size, so two
+  // identical Llanowar Elves read "2 Llanowar Elves (1/1)" while a pumped one stays
+  // separate.
+  const labels = run.map((entry) => (entry.card ? `${entry.card}${entry.stats ? ` ${entry.stats}` : ''}` : null))
+  const subject = names.length === run.length ? joinList(countedList(labels)) : `${run.length} sources`
   const total = run.reduce((sum, entry) => sum + (entry.amount || 0), 0)
   // The total is the *last* hit's, not the first's: each blow reports the running
   // total, and only the final one is where the target ended up. Taken from that hit
