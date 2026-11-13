@@ -1630,7 +1630,16 @@ class LogParser {
       // Not narrated here. This transfer is the card *leaving* the stack, which for
       // a sorcery happens after its effect — so "X resolves" printed below the thing
       // X did. The line is emitted from ResolutionStart instead.
+      //
+      // Except a permanent arriving tapped, read off the object in this same message
+      // as a land's is. It explains a creature with haste that then never attacks.
+      // **Stated without a cause**: the usual one is a static "enters tapped" ability
+      // such as Authority of the Consuls', which no annotation links to the creature,
+      // and the owner chose not to have it inferred from what is on the battlefield.
       case 'Resolve':
+        if (toKind === 'battlefield' && this.objectTapped.get(instanceId)) {
+          return this.push('tapped', `${card} enters tapped`, { seat, card: name })
+        }
         return undefined
       case 'Discard': {
         // MTGA advances the turn counter before reporting the previous turn's
