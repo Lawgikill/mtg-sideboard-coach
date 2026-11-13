@@ -2341,6 +2341,16 @@ button:disabled {
   font-style: italic;
 }
 
+/* Where MTGA left part of its log out. A statement about the record, not the game,
+   so it is set apart from the plays around it rather than read as one of them. */
+.replay-loggap {
+  border-left: 2px dashed #5a646e;
+  color: #8b97a3;
+  font-size: 12.5px;
+  font-style: italic;
+  padding-left: 8px;
+}
+
 /* Dotted rather than solid: it marks the name as inspectable without turning a line
    of narration into a row of links. */
 .replay-card {

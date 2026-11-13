@@ -182,6 +182,9 @@ class LogParser {
     this.pendingDeck = null
     this.cancelledCasts = new Set()
     this.messageIndex = 0
+    // True once MTGA has left part of the current turn out of its log (see noteLogGap),
+    // which makes the turn's closing counts unreliable.
+    this.gapThisTurn = false
     this.pendingSearch = null
     // Ability instances in the message being handled that are mana abilities.
     this.manaAbilities = new Set()
@@ -515,6 +518,22 @@ class LogParser {
     this.game.events.push({ turn: this.turn, kind, text, ...duringCast, ...extra })
   }
 
+  // MTGA's own logger drops a whole batch of messages when any game state in it has
+  // more than 50 objects or annotations, writing only their counts in its place. A
+  // library-sized reveal is enough: a search showed all 51 cards of a library, and
+  // the batch it rode in took the spell's payment, its commitment, a Saga's chapter
+  // trigger and the search itself with it. Nothing in the gap can be recovered, so
+  // the narration says where it is rather than reading as if nothing happened.
+  noteLogGap(updates) {
+    if (!this.game) return
+    this.gapThisTurn = true
+    // The commitment that would close a cast in progress may be in the gap.
+    this.castingOpen = false
+    const many = updates !== 1
+    this.push('loggap', `MTGA's log leaves out ${updates} game update${many ? 's' : ''} here, `
+      + `so anything that happened in ${many ? 'them' : 'it'} is missing`, { seat: null })
+  }
+
   handleMessage(message) {
     if (message.systemSeatIds && message.systemSeatIds.length === 1) {
       const seat = message.systemSeatIds[0]
@@ -822,6 +841,7 @@ class LogParser {
       this.blockState = new Map()
       this.turn = 0
       this.activeSeat = null
+      this.gapThisTurn = false
       this.handZones = new Map()
       this.openingReported = false
       this.libraryCounts = new Map()
@@ -1087,6 +1107,14 @@ class LogParser {
     // but the count at this moment is what the opponent is representing.
     const defender = this.otherSeat(this.activeSeat)
 
+    // A turn MTGA left part of out of its log closes with neither summary. Taps,
+    // draws and zone changes inside the gap were never seen, so the numbers would be
+    // stated with confidence and be wrong: a Plains tapped in the gap read as one of
+    // "1 of 3 lands untapped" when the player was tapped out. Both correct themselves
+    // by the next turn, as the untap step and zone updates report afresh.
+    const reliable = !this.gapThisTurn
+    this.gapThisTurn = false
+
     // What the player who just finished is left holding. Emitted here, with the next
     // turn's header, because this is the first moment the turn's state is final — and
     // relocated back into their turn by relocateTurnEnd, exactly like the mana line.
@@ -1096,7 +1124,7 @@ class LogParser {
     // belonging to whoever was acting.
     //
     // Skipped on turn 1, which closes no previous turn.
-    if (defender != null && this.turn > 1) {
+    if (reliable && defender != null && this.turn > 1) {
       const library = this.librarySizes.get(defender)
       const hand = this.handSizes.get(defender)
       if (library != null || hand != null) {
@@ -1109,7 +1137,7 @@ class LogParser {
       }
     }
 
-    if (defender != null) {
+    if (reliable && defender != null) {
       const { total, untapped } = this.landStatus(defender)
       if (total > 0) {
         // The land count rides along even when nothing is untapped: "tapped out" on
@@ -2727,6 +2755,11 @@ function findSideboarding(text, resolveName) {
   return steps
 }
 
+// Written by MTGA in place of a batch of game messages too large for its logger,
+// followed by a `::: GameStateMessage` line (and two count lines) per state left out.
+const LOG_GAP_MARKER = '[Message summarized because'
+const LOG_GAP_STATE = '::: GameStateMessage'
+
 async function findCancelledCasts(logPath) {
   const cancelled = new Set()
   // instanceId -> the attempt currently on the stack for it. **One at a time**: a
@@ -2747,6 +2780,15 @@ async function findCancelledCasts(logPath) {
   })
 
   for await (const line of rl) {
+    // The evidence for an attempt still open here may be in the batch MTGA left out
+    // (see noteLogGap) — a real The Naked Time lost both its commitment and its
+    // resolution that way, and was dropped as cancelled. With the evidence gone,
+    // keeping a cast is the safer error: a backed-out attempt is rare, while a gap
+    // that swallows a commitment takes the whole spell out of the narration.
+    if (line.startsWith(LOG_GAP_MARKER)) {
+      open = new Map()
+      continue
+    }
     const brace = line.indexOf('{')
     if (brace === -1) continue
     let payload
@@ -2832,9 +2874,27 @@ async function parseLogFile(logPath, options = {}) {
     crlfDelay: Infinity,
   })
 
+  // States left out by the gap being read, reported once its listing ends.
+  let gapStates = null
+  const flushGap = () => {
+    if (gapStates != null) parser.noteLogGap(gapStates)
+    gapStates = null
+  }
+
   for await (const line of rl) {
+    if (line.startsWith(LOG_GAP_MARKER)) {
+      flushGap()
+      gapStates = 0
+      continue
+    }
+    if (gapStates != null && line.startsWith(LOG_GAP_STATE)) {
+      gapStates += 1
+      continue
+    }
+
     const brace = line.indexOf('{')
     if (brace === -1) continue
+    flushGap()
 
     let payload
     try {
@@ -2873,6 +2933,7 @@ async function parseLogFile(logPath, options = {}) {
       parser.handleMessage(message)
     }
   }
+  flushGap()
 
   return {
     games: parser.finish().map((game) => ({
