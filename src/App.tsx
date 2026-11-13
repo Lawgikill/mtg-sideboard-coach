@@ -3017,7 +3017,7 @@ function ReplayView({
           <ReplayExportPair
             label="Match"
             copyTitle="Copy every game of this match as text"
-            downloadTitle="Download the whole match as a .txt file"
+            downloadTitle="Download the whole match as an HTML file"
             text={() => buildReplayText(currentMatch.match, undefined, assignedArchetype, extras)}
             html={() => buildReplayHtml(currentMatch.match, undefined, assignedArchetype, cardByName, extras)}
             filename={(ext) => replayFileName(currentMatch.match, undefined, ext)}
@@ -3027,7 +3027,7 @@ function ReplayView({
               key={game.gameNumber}
               label={`Game ${game.gameNumber}`}
               copyTitle={`Copy game ${game.gameNumber} as text`}
-              downloadTitle={`Download game ${game.gameNumber} as a .txt file`}
+              downloadTitle={`Download game ${game.gameNumber} as an HTML file`}
               text={() => buildReplayText(currentMatch.match, game, assignedArchetype, extras)}
               html={() => buildReplayHtml(currentMatch.match, game, assignedArchetype, cardByName, extras)}
               filename={(ext) => replayFileName(currentMatch.match, game, ext)}
