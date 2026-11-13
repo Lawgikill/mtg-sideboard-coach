@@ -8,6 +8,9 @@ type MtgaGameEvent = {
   // The zone a card came from, where the event is a zone transfer. Hand and library
   // are hidden, so leaving one is how a distinct copy becomes known.
   fromZone?: string
+  // Where a card put by an effect went ("onto the battlefield tapped", "on the bottom
+  // of their library"); null on a merged line whose cards went different ways.
+  destination?: string | null
   // The card that caused this, when one is known. It is also appended to `cards` so
   // the attribution is hoverable, which is why anything reading `cards` for
   // ownership has to exclude it — a cause can belong to either player.

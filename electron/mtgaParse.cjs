@@ -1997,8 +1997,11 @@ class LogParser {
       // are what distinguish it from a mill, and whose library it was is the point.
       case 'Surveil': {
         const cause = this.causeOf(annotation, name)
+        // Its own verb and destination, so a run of surveils merges as surveils: read
+        // as puts, two surveiled cards became "puts Island and Final Frontier undefined"
+        // with no player named.
         return this.push('select', `${who} surveils ${card} into their graveyard${cause ? ` (${cause})` : ''}`,
-          { seat, card: name, source: cause, fromZone: fromKind })
+          { seat, card: name, source: cause, fromZone: fromKind, verb: 'surveils', destination: 'into their graveyard' })
       }
 
       // A spell countered on the stack. This is the one case where the log names the
@@ -2131,7 +2134,7 @@ class LogParser {
       events = collapseRuns(events, 'attack', attackDescriber, sameTarget)
       events = collapseRuns(events, 'damage', damageDescriber, sameTargetOnce)
       events = collapseRuns(events, 'counter', counterDescriber, sameCounter)
-      events = collapseRuns(events, 'select', selectDescriber)
+      events = collapseRuns(events, 'select', selectDescriber, sameSelect)
       events = collapseRuns(events, 'token', tokenDescriber, sameToken)
       events = mergeScryDraw(events)
       events = mergeSharedSource(events)
@@ -2799,8 +2802,15 @@ function cardLabels(names, total) {
 // Looking at the top of the library and splitting the result is one decision, so
 // "puts a card into hand" and "puts a card on the bottom" become one sentence.
 // Where every card went the same way, the destination is said once.
+// A put and a surveil are both `select` lines but never one effect, so a run keeps to
+// one player and one verb.
+function sameSelect(a, b) {
+  return a.seat === b.seat && (a.verb || 'puts') === (b.verb || 'puts')
+}
+
 function selectDescriber(run) {
-  const { who } = splitOn(run[0].text, ' puts ')
+  const verb = run[0].verb || 'puts'
+  const { who } = splitOn(run[0].text, ` ${verb} `)
   const destinations = new Set(run.map((entry) => entry.destination))
   // The whole run is one effect resolving, so a cause shared by all of it is stated
   // once at the end. Rebuilt here rather than inherited, because the merged text is
@@ -2820,7 +2830,8 @@ function selectDescriber(run) {
     return {
       turn: run[0].turn,
       kind: 'select',
-      text: `${who} puts ${joinList(labels)}${origin} ${run[0].destination}${shuffled}${credit}`,
+      verb: run[0].verb,
+      text: `${who} ${verb} ${joinList(labels)}${origin} ${run[0].destination}${shuffled}${credit}`,
       seat: run[0].seat,
       card: null,
       cards,
@@ -2834,7 +2845,8 @@ function selectDescriber(run) {
   return {
     turn: run[0].turn,
     kind: 'select',
-    text: `${who} puts ${joinList(fragments)}${shuffled}${credit}`,
+    verb: run[0].verb,
+    text: `${who} ${verb} ${joinList(fragments)}${shuffled}${credit}`,
     seat: run[0].seat,
     card: null,
     cards,

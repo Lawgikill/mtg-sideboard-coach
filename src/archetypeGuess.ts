@@ -10,8 +10,12 @@ import type { CardRecord, Matchup } from './types'
 
 // Events that show the opponent *owning* a card. Mill is excluded on its own: a
 // mill line is attributed to the card's owner, who is whoever is being milled.
+//
+// `select` is a card put somewhere by an effect — a land fetched onto the battlefield,
+// a tutor into hand. It was left out, so every land The Naked Time and Erode fetched
+// was missing from the summary: 2 Mountain and 1 Island where game one showed 3 and 2.
 const OWNERSHIP_KINDS = new Set([
-  'play', 'cast', 'discard', 'sacrifice', 'exile', 'return', 'destroy', 'attack', 'mill',
+  'play', 'cast', 'discard', 'sacrifice', 'exile', 'return', 'destroy', 'attack', 'mill', 'select',
 ])
 
 // Hand and library are hidden, so a card leaving one is the moment a *distinct copy*
@@ -84,9 +88,13 @@ export function observedCardsInGame(
         ? [part.card, ...(event.cards ?? [])].filter((name) => name && name !== event.source)
         : [part.card].filter(Boolean)
 
+      // A card put back into the library (on the bottom) has not left it, so it is no
+      // copy yet: drawn and played later, it would be counted twice.
+      const stayedInLibrary = kind === 'select' && /library/.test(event.destination ?? '')
+
       for (const name of (owned as string[]).map((each) => listedName(each, cardByName))) {
         seen.set(name, 1)
-        if (part.fromZone && HIDDEN_ZONES.has(part.fromZone)) {
+        if (part.fromZone && HIDDEN_ZONES.has(part.fromZone) && !stayedInLibrary) {
           copies.set(name, (copies.get(name) || 0) + 1)
         }
       }
