@@ -207,6 +207,10 @@ class LogParser {
     this.manaAbilities = new Set()
     // Permanents whose counters change in the message being handled.
     this.counterTargets = new Set()
+    // Ability instance -> instances it tapped, and mana abilities whose permanent was
+    // sacrificed to pay. Cleared each turn.
+    this.manaTaps = new Map()
+    this.manaSacrifices = new Set()
     // The latest card put from a library outside a search, until a shuffle by the same
     // effect closes it.
     this.lastLibraryPut = null
@@ -362,7 +366,8 @@ class LogParser {
       if (event.kind !== 'cast' && event.kind !== 'activate') return event
       const targets = event.targetLabels && event.targetLabels.length > 0
       const tapped = event.tappedFor && event.tappedFor.length > 0
-      if (!targets && !tapped && !event.paidCost && !event.altCost && !(event.modes && event.modes.length)) {
+      const manaTapped = event.manaTaps && event.manaTaps.length > 0
+      if (!targets && !tapped && !manaTapped && !event.paidCost && !event.altCost && !(event.modes && event.modes.length)) {
         return event
       }
 
@@ -371,12 +376,16 @@ class LogParser {
       // additional one is paid on top ("with offspring"). Permanents tapped to pay
       // follow the cost they paid ("for harmonize, tapping Duelist of the Mind").
       const cost = `${event.altCost ? ` ${event.altCost}` : ''}${event.paidCost ? ` with ${event.paidCost}` : ''}`
-      const tapping = tapped ? `, tapping ${joinList(countedList(event.tappedFor))}` : ''
+      const tapping = `${tapped ? `, tapping ${joinList(countedList(event.tappedForLabels || event.tappedFor))}` : ''}${
+        manaTapped ? `, tapping ${joinList(countedList(event.manaTaps))} for mana` : ''}`
       const modes = event.modes && event.modes.length
         ? `, choosing ${joinList(event.modes.map((mode) => `"${mode}"`))}`
         : ''
       // Tapped and targeted permanents stay hoverable alongside the spell's own name.
-      const cards = [...(event.cards || []), ...(event.tappedFor || []), ...(targets ? event.targetCards || [] : [])]
+      const cards = [
+        ...(event.cards || []), ...(event.tappedFor || []), ...(event.manaTapCards || []),
+        ...(targets ? event.targetCards || [] : []),
+      ]
       if (!targets) return { ...event, text: `${event.text}${cost}${tapping}${modes}`, cards }
       return {
         ...event,
@@ -1240,6 +1249,8 @@ class LogParser {
     this.turnDrawSeen = false
     this.castingOpen = false
     this.lastLibraryPut = null
+    this.manaTaps = new Map()
+    this.manaSacrifices = new Set()
     this.damagedBy = new Map()
     this.wardResolving = null
     this.abilityTargets = new Map()
@@ -1536,8 +1547,51 @@ class LogParser {
         event.kind === 'cast' && event.instanceId === annotation.affectorId
         && !all.slice(0, index).some((later) => later.kind === 'turn'))
       if (cast) {
-        const names = (annotation.affectedIds || []).map((id) => this.nameOf(id)).filter(Boolean)
-        cast.tappedFor = [...(cast.tappedFor || []), ...names]
+        const ids = annotation.affectedIds || []
+        cast.tappedFor = [...(cast.tappedFor || []), ...ids.map((id) => this.nameOf(id)).filter(Boolean)]
+        cast.tappedForLabels = [...(cast.tappedForLabels || []), ...ids.map((id) => this.sized(id)).filter(Boolean)]
+      }
+      // Every tap, against what did it, so a mana ability can say what it tapped once its
+      // `actionType: 4` arrives — for Springleaf Drum, the Drum and a creature, in two
+      // separate messages.
+      if (annotation.affectorId != null) {
+        const taps = this.manaTaps.get(annotation.affectorId) || []
+        taps.push(...(annotation.affectedIds || []))
+        this.manaTaps.set(annotation.affectorId, taps)
+      }
+    }
+
+    // A mana ability, narrated unless a land made it. Land taps are ~80 a match and stay
+    // silent; anything else tapping for mana is a real play — Llanowar Elves not
+    // attacking, Springleaf Drum tapping a creature as its cost, which otherwise left
+    // Starfield Shepherd tapped with nothing saying why. A permanent sacrificed for mana
+    // already has its line ("sacrifices Treasure for mana"). Made while a spell is being
+    // cast, it folds onto that cast line, as a cost tap does; made beforehand, it is its
+    // own line where it happened.
+    if (types.includes('AnnotationType_UserActionTaken') && details.actionType === 4 && this.game) {
+      const abilityId = (annotation.affectedIds || [])[0]
+      const tapped = this.manaTaps.get(abilityId) || []
+      this.manaTaps.delete(abilityId)
+      const sourceId = this.abilityInstanceOwner.get(abilityId)
+      const fromLand = (this.objectTypes.get(sourceId) || []).includes('CardType_Land')
+      if (!fromLand && tapped.length > 0 && !this.manaSacrifices.has(abilityId)) {
+        const labels = tapped.map((id) => this.sized(id)).filter(Boolean)
+        const names = tapped.map((id) => this.nameOf(id)).filter(Boolean)
+        const cast = this.castingOpen
+          ? [...this.game.events].reverse().find((event, index, all) =>
+            event.kind === 'cast' && !all.slice(0, index).some((later) => later.kind === 'turn'))
+          : null
+        if (cast) {
+          cast.manaTaps = [...(cast.manaTaps || []), ...labels]
+          cast.manaTapCards = [...(cast.manaTapCards || []), ...names]
+        } else if (labels.length > 0) {
+          this.push('manatap', `${this.seatLabel(annotation.affectorId)} taps ${joinList(countedList(labels))} for mana`, {
+            seat: annotation.affectorId,
+            card: names.length === 1 ? names[0] : null,
+            cards: names,
+            labels,
+          })
+        }
       }
     }
 
@@ -1884,6 +1938,8 @@ class LogParser {
         // sacrifice. Saying what it was for also makes naming the source redundant:
         // a Treasure sacrificed for its own mana ability read "(Treasure)".
         if (this.manaAbilities.has(annotation.affectorId)) {
+          // Recorded so the same ability's tap does not get a line of its own as well.
+          this.manaSacrifices.add(annotation.affectorId)
           return this.push('sacrifice', `${who} sacrifices ${sacrificed} for mana`, { seat, card: name })
         }
 
