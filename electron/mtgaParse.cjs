@@ -1684,7 +1684,11 @@ class LogParser {
         // flashback, escape, adventure and the rest change what the play means, and
         // the zone it came from is the only record that it happened.
         const origin = castOrigin(fromKind)
-        this.push('cast', `${who} casts ${card}${origin}`, { seat, card: name, instanceId, fromZone: fromKind })
+        // A copy says so, read off the object's `isCopy` in this message: a prepared
+        // spell is a copy of the card's other half, kept in exile, so "casts
+        // Improvised Act from exile" read as if the card itself had been exiled.
+        const what = this.objectCopies.has(instanceId) ? `a copy of ${card}` : card
+        this.push('cast', `${who} casts ${what}${origin}`, { seat, card: name, instanceId, fromZone: fromKind })
         this.castingOpen = true
         return undefined
       }
