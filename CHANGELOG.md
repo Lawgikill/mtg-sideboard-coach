@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.5 — 2026-11-13
+
+Almost everything here is in the Replay tab: the narration says more of what the log records, and gets several things right that it got wrong.
+
+### Creature sizes everywhere
+
+- **Every creature on the battlefield shows its size wherever it is named**: `Guiding Hydra (3/2) loses a +1/+1 counter and Nova Hellkite (6/7) and Starfield Shepherd (4/3) get a +1/+1 counter (Guiding Hydra)`. Counters, pumps and prowess all show up the same way, as the number beside the name. A creature leaving the battlefield shows its last size there: `Duelist of the Mind (0/3) dies`.
+- **Combat shows sizes at each step**: on the attack, on the block, and on the damage, so growth mid-combat is visible and the damage adds up.
+- **Blocks name the blocker**: `Nova Hellkite (5/5) is blocked by Duelist of the Mind (0/3)`.
+- **Attacks state the defender's life**: `Nova Hellkite (5/5) attacks Tropical Taco (12 life)`.
+- **Power and toughness changes are reported**: `Pompous Battlemage (4/4) gets +1/+1 from prowess`, `Salt Vampire (0/0) gets -2/-2 (Eject the Warp Core)`.
+
+### New in the narration
+
+- **Warp**: `casts and resolves Nova Hellkite for warp`, and the end-step exile, `Nova Hellkite (5/6) is exiled by warp`. Other alternative costs read the same way (`for harmonize`, `without paying its mana cost`).
+- **Creatures tapped to pay for a spell**: `… for harmonize, tapping Duelist of the Mind`.
+- **Cast copies**: `casts and resolves a copy of Improvised Act from exile (Pompous Battlemage)`.
+- **Entering tapped**: `Quantum Riddler (5/7) enters tapped`, for spells resolving and creatures returning to the battlefield.
+- **Sagas state their chapter**: `The Naked Time gets a Lore counter (now 3)`. Other counters show their count too, except +1/+1 counters, which the size already shows.
+- **Cards put onto the battlefield say where from**: `Tropical Taco puts Mountain from their library onto the battlefield tapped and shuffles (The Naked Time)`. Your own searches end `, and shuffles` too.
+- **Gaps in MTGA's own log are pointed out**: MTGA occasionally leaves a batch of updates out of its log. The narration now says so where it happens, instead of reading as if nothing occurred.
+
+### Fixes
+
+- **Creatures exiled instead of dying no longer read "dies"**: `Momo, Friendly Flier (1/1) is exiled instead of dying (Torch the Tower)`.
+- **Searches count what they put onto the battlefield**: The Naked Time and Final Frontier read "takes 0 of 1 option" above the land they had just fetched.
+- **Combat damage to a player is reported once.** A separate life-loss line repeated it and blamed all of it on one attacker.
+- **Two Sagas at different chapters are no longer merged into one line**, and a chapter's effect is credited to the right copy.
+- **Things that happened in different phases are no longer merged into one line**, such as a creature entering with counters and its beginning-of-combat trigger.
+- **A spell cast just before a gap in MTGA's log is no longer dropped** as if it had been cancelled, and that turn no longer closes with land counts the gap made wrong.
+- **"What they showed" counts fetched and tutored cards**, so lands fetched by an opponent's spells are no longer missing from the totals.
+- **Two cards surveiled at once read correctly**, not as `puts Island and Final Frontier undefined`.
+
+### Smaller changes
+
+- **Sideboarding lists always show a count**, 1 included: `1 Nova Hellkite`. This covers your boarding, the opponent's possible board-ins, and the Journal notes that Import from Replay fills in.
+- The separators in a list of card names are no longer coloured like the rest of a red damage line.
+- The replay download buttons say they save HTML files, not text files.
+
 ## 1.4 — 2026-11-12
 
 Fixes to how the Replay tab reads MTGA logs. The biggest affects any session with more than one match.
