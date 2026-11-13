@@ -412,14 +412,24 @@ class LogParser {
       this.game.events = this.game.events.filter((_, index) => !absorbed.has(index))
     }
 
-    const taken = named.length === search.taken && named.length > 0
-      ? `: ${joinList(named)}`
-      : ''
+    // Where the cards went. A tutor to hand "takes" them, which is what the line said
+    // before any other destination was counted; a search putting its find straight
+    // onto the battlefield says so, since that is the point of the card. Mixed
+    // destinations name each card's own.
+    const places = new Set(search.destinations)
+    const listed = named.length === search.taken && named.length > 0
+    let verb = `takes ${search.taken} of ${options}`
+    let taken = listed ? `: ${joinList(named)}` : ''
+    if (places.size === 1 && !places.has('into hand')) {
+      verb = `puts ${search.taken} of ${options} ${[...places][0]}`
+    } else if (places.size > 1 && listed) {
+      taken = `: ${joinList(named.map((name, index) => `${name} ${search.destinations[index]}`))}`
+    }
 
     this.game.events.splice(search.at, 0, {
       turn: this.turn,
       kind: 'search',
-      text: `${this.seatLabel(search.seat)} searches their library and takes ${search.taken} of ${options}${taken}${credit}`,
+      text: `${this.seatLabel(search.seat)} searches their library and ${verb}${taken}${credit}`,
       seat: search.seat,
       source: search.source,
       cards: named,
@@ -627,6 +637,8 @@ class LogParser {
         candidates: (message.searchReq.itemsSought || []).length,
         taken: 0,
         cards: [],
+        // Each taken card's destination, parallel to `cards`.
+        destinations: [],
         absorbed: [],
         // Where the line belongs: before the cards it reports on.
         at: this.game.events.length,
@@ -1772,13 +1784,22 @@ class LogParser {
         let destination = null
         if (toKind === 'hand' && fromKind === 'library') destination = 'into hand'
         else if (toKind === 'library' && fromKind === 'library') destination = 'on the bottom of their library'
+        // Shared zones take no possessive: "into their battlefield" read as if each
+        // player had one.
+        else if (toKind === 'battlefield') destination = 'onto the battlefield'
+        else if (toKind === 'exile') destination = 'into exile'
         else if (fromKind !== toKind) destination = `into their ${toKind || 'library'}`
         if (!destination) return undefined
 
         const cause = this.causeOf(annotation, name)
-        if (this.pendingSearch && fromKind === 'library' && toKind === 'hand') {
+        // Anything leaving the library during a search is what it found, wherever it
+        // went. Counting only cards put into hand made every search that puts its find
+        // onto the battlefield — The Naked Time, Final Frontier — read "takes 0 of 1
+        // option" directly above the land it had just fetched.
+        if (this.pendingSearch && fromKind === 'library' && toKind !== 'library') {
           this.pendingSearch.taken += 1
           this.pendingSearch.cards.push(name)
+          this.pendingSearch.destinations.push(destination)
           // Held so the search line can absorb these rather than repeat them.
           this.pendingSearch.absorbed.push(this.game.events.length)
         }
