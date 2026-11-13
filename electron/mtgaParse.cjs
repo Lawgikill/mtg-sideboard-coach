@@ -547,7 +547,8 @@ class LogParser {
     // committed is a cost being paid — a painland's life, a Treasure sacrificed.
     // Flagged so the cast/resolve collapse can refuse to swallow it.
     const duringCast = this.castingOpen && kind !== 'cast' ? { duringCast: true } : {}
-    this.game.events.push({ turn: this.turn, kind, text, ...duringCast, ...extra })
+    // The phase, so no merge joins lines from two different phases (see samePhase).
+    this.game.events.push({ turn: this.turn, kind, text, phase: this.phase || null, ...duringCast, ...extra })
   }
 
   // MTGA's own logger drops a whole batch of messages when any game state in it has
@@ -2014,6 +2015,17 @@ function joinList(items) {
 // a different beat of the turn, and folding across it would reorder the narration.
 // `sameGroup` compares a candidate with the run's first entry, and also gets the run
 // so far for a rule that depends on every member (see sameTargetOnce).
+// Whether two lines happened in the same phase of the turn. Adjacency was the only
+// timing rule the merges had, and a phase change is invisible in the narration: Guiding
+// Hydra entering with three +1/+1 counters in the main phase, and its beginning-of-
+// combat trigger moving one of them onto two other creatures, merged into one sentence
+// that read as a single event. Every game-state message carries the phase in its
+// `turnInfo`, so each line is stamped with it as it is pushed. A line without one —
+// spliced in rather than pushed — is not held to it.
+function samePhase(a, b) {
+  return a.phase == null || b.phase == null || a.phase === b.phase
+}
+
 function collapseRuns(events, kind, describe, sameGroup = (a, b) => a.seat === b.seat) {
   const out = []
 
@@ -2023,12 +2035,17 @@ function collapseRuns(events, kind, describe, sameGroup = (a, b) => a.seat === b
       continue
     }
 
+    // Never across a phase boundary (see samePhase): adjacent lines from different
+    // phases are different events, however alike.
     let end = i + 1
     while (end < events.length && events[end].kind === kind
+      && samePhase(events[end], events[i])
       && sameGroup(events[end], events[i], events.slice(i, end))) end += 1
 
     const run = events.slice(i, end)
-    out.push(run.length === 1 ? run[0] : describe(run))
+    // The describers build a fresh line, so the phase is carried across by hand, or
+    // a collapsed line would read as unknown and merge across a boundary later.
+    out.push(run.length === 1 ? run[0] : { ...describe(run), phase: run[0].phase })
     i = end - 1
   }
 
@@ -2640,6 +2657,7 @@ function mergeSharedSource(events) {
 
   const canPair = (previous, event) => Boolean(event.source
       && previous
+      && samePhase(previous, event)
       && previous.source === event.source
       && MERGEABLE.has(event.kind)
       && MERGEABLE.has(previous.kind)
