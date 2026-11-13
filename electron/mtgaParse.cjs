@@ -49,6 +49,23 @@ function keywordText(text) {
   return cleaned ? cleaned.charAt(0).toLowerCase() + cleaned.slice(1) : null
 }
 
+// The keyword naming a cost: "Offspring {o2}" -> "offspring", "Warp {o1oU}" -> "warp".
+function costKeyword(text) {
+  const keyword = (text || '').match(/^([A-Za-z][A-Za-z' ]*?)(?=\s*(\{|\(|—|$))/)
+  return keyword ? keyword[1].toLowerCase() : null
+}
+
+// How a spell cast for an alternative cost reads after its name. A keyword cost
+// ("Warp {o1oU}", "Harmonize {o4oU}", "Beam me up {o2oW}") reads "for warp"; a free
+// cast — ability 149, "Cast without paying mana cost", which every effect casting a
+// card from exile for free uses — reads as the rules say it. Anything else says
+// nothing rather than guess: these were every alternative cost in two archives.
+function altCostPhrase(text) {
+  if (!text) return null
+  if (/^Cast without paying/i.test(text)) return 'without paying its mana cost'
+  return /\{/.test(text) && costKeyword(text) ? `for ${costKeyword(text)}` : null
+}
+
 function abilityEffect(text, cardName) {
   if (!text) return null
   const cleaned = text
@@ -311,9 +328,7 @@ class LogParser {
 
     if (choice.type === 'CastingTimeOptionType_AdditionalCost') {
       // "Offspring {o2}" -> "offspring"; the same for kicker, bargain, gift.
-      const text = this.resolveAbilityText(option.grpId) || ''
-      const keyword = text.match(/^([A-Za-z][A-Za-z' ]*?)(?=\s*(\{|\(|—|$))/)
-      cast.paidCost = keyword ? keyword[1].toLowerCase() : 'an additional cost'
+      cast.paidCost = costKeyword(this.resolveAbilityText(option.grpId)) || 'an additional cost'
     }
 
     if (choice.type === 'CastingTimeOptionType_Modal' && choice.modes.length > 0) {
@@ -329,10 +344,12 @@ class LogParser {
     return events.map((event) => {
       if (event.kind !== 'cast' && event.kind !== 'activate') return event
       const targets = event.targetLabels && event.targetLabels.length > 0
-      if (!targets && !event.paidCost && !(event.modes && event.modes.length)) return event
+      if (!targets && !event.paidCost && !event.altCost && !(event.modes && event.modes.length)) return event
 
-      // Cost, then mode, then targets: the mode says what the targets are for.
-      const cost = event.paidCost ? ` with ${event.paidCost}` : ''
+      // Cost, then mode, then targets: the mode says what the targets are for. An
+      // alternative cost replaces the mana cost, so it comes first ("for warp"); an
+      // additional one is paid on top ("with offspring").
+      const cost = `${event.altCost ? ` ${event.altCost}` : ''}${event.paidCost ? ` with ${event.paidCost}` : ''}`
       const modes = event.modes && event.modes.length
         ? `, choosing ${joinList(event.modes.map((mode) => `"${mode}"`))}`
         : ''
@@ -1343,6 +1360,20 @@ class LogParser {
     // everything emitted before it was cost payment.
     if (types.includes('AnnotationType_UserActionTaken') && details.actionType === 1) {
       this.castingOpen = false
+      // Cast for an alternative cost: warp, and the same field would carry evoke, dash
+      // and the like. The commitment names the cost's ability, and unlike a
+      // casting-time reply it is game state, so the opponent's arrive too — their
+      // Quantum Riddlers were warped exactly as often as our Nova Hellkites. Recasting
+      // a warped card from exile later is *not* this: that commitment names the
+      // permission (`abilityGrpId: 371`, "Warp") and pays the normal cost.
+      if (details.alternativeGrpId && this.game) {
+        const spellId = (annotation.affectedIds || [])[0]
+        const cast = [...this.game.events].reverse().find((event, index, all) =>
+          event.kind === 'cast' && event.instanceId === spellId
+          && !all.slice(0, index).some((later) => later.kind === 'turn'))
+        const phrase = altCostPhrase(this.resolveAbilityText(details.alternativeGrpId))
+        if (cast && phrase) cast.altCost = phrase
+      }
     }
 
     // Activating an ability. UserActionTaken classifies every player action, and
@@ -1581,6 +1612,21 @@ class LogParser {
           source: cause,
           subject,
           predicate: { one: `is exiled${origin}`, many: `are exiled${origin}` },
+        })
+      }
+      // A warped permanent leaving at the end step. MTGA gives it a category of its
+      // own rather than `Exile`, so it fell through and said nothing — which left the
+      // card's later "casts Nova Hellkite from exile" with no account of how it got
+      // there. The delayed trigger behind it names only the card itself, so the
+      // mechanic is the cause worth stating. Not a card name, so not a `source`.
+      case 'Warp': {
+        const subject = this.nameOf(instanceId) || card
+        return this.push('exile', `${subject} is exiled by warp`, {
+          fromZone: fromKind,
+          seat,
+          card: name,
+          subject,
+          predicate: { one: 'is exiled by warp', many: 'are exiled by warp' },
         })
       }
       case 'Return':
