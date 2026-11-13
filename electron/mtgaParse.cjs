@@ -763,6 +763,18 @@ class LogParser {
       if (source) this.replacementSources.add(source)
     }
 
+    // Each object's running count per counter type, from the persistent `Counter`
+    // annotation that arrives with the change. Collected first for the same reason
+    // again: persistent annotations are otherwise read after the transient ones.
+    this.counterTotals = new Map()
+    for (const annotation of state.persistentAnnotations || []) {
+      if (!(annotation.type || []).includes('AnnotationType_Counter')) continue
+      const details = detailsToObject(annotation)
+      for (const id of annotation.affectedIds || []) {
+        this.counterTotals.set(`${id}:${details.counter_type}`, details.count)
+      }
+    }
+
     for (const annotation of state.annotations || []) this.handleAnnotation(annotation)
     this.noticeGrantedAbilities(state)
 
@@ -1336,8 +1348,11 @@ class LogParser {
         // Loyalty left, when the object was reported in this same message — so a
         // blow to a planeswalker can say what it left behind.
         const loyalty = this.objectLoyalty.get(id)
+        // The count it was left with, when this message reported one. A counter
+        // removed down to none has no annotation left to report it, so says nothing.
+        const countAfter = this.counterTotals.get(`${id}:${details.counter_type}`)
 
-        this.push('counter', counterPhrase([target], added, amount, kind, source), {
+        this.push('counter', counterPhrase([target], added, amount, kind, source, countAfter), {
           seat: this.objectController.get(id),
           card: target,
           added,
@@ -1347,6 +1362,8 @@ class LogParser {
           instanceId: id,
           msg: this.messageIndex,
           loyaltyAfter: loyalty && loyalty.msg === this.messageIndex ? loyalty.value : undefined,
+          countAfter,
+          sourceId: this.causeInstance(annotation),
         })
       }
     }
@@ -1662,7 +1679,7 @@ class LogParser {
         const cause = this.sourceOf(annotation.affectorId)
         return this.push('sacrifice',
           `${who} sacrifices ${sacrificed}${cause ? ` (${cause})` : ''}`,
-          { seat, card: name, source: cause })
+          { seat, card: name, source: cause, sourceId: this.causeInstance(annotation) })
       }
       case 'Exile':
       {
@@ -2418,26 +2435,40 @@ function mergeResolveAttach(events) {
 
 // One phrasing for a counter line, so a single creature and a merged run cannot
 // drift apart. "a +1/+1 counter" rather than "1 counter" reads as English.
-function counterPhrase(targets, added, amount, kind, source) {
+function counterPhrase(targets, added, amount, kind, source, countAfter) {
   const subject = joinList(countedList(targets))
+  // A Saga's lore count is its chapter, and the chapter is the point of the line: two
+  // Sagas ticking up together, one to chapter III and one to II, merged into "2 The
+  // Naked Time get a Lore counter" and hid which was which. Shown for lore alone —
+  // elsewhere the running count is not what the line is read for.
+  const lore = kind === 'Lore' && countAfter != null
+  const total = lore ? ` (now ${countAfter})` : ''
   // The source is named even when it is the target. It reads redundantly in
   // isolation, but a counter a permanent puts on or takes off itself is the cost or
   // effect of its own ability, and naming it is what ties the line to the other
   // lines of that same trigger — a counter removed as a cost otherwise looks
   // unrelated to the destroy it paid for.
-  const credit = source || null
+  //
+  // Except a Saga's own lore counter, where it would sit beside the total as a second
+  // parenthetical naming the card the line opens with. The `source` field still
+  // carries it, and that is what the merges pair on, so the chapter's effects still
+  // fold into this line.
+  const selfLore = lore && targets.length === 1 && targets[0] === source
+  const credit = source && !selfLore ? source : null
   const verb = targets.length > 1 ? (added ? 'get' : 'lose') : (added ? 'gets' : 'loses')
   const quantity = amount === 1 ? 'a' : String(amount)
   const noun = `${kind ? `${kind} ` : ''}counter${amount === 1 ? '' : 's'}`
-  return `${subject} ${verb} ${quantity} ${noun}${credit ? ` (${credit})` : ''}`
+  return `${subject} ${verb} ${quantity} ${noun}${total}${credit ? ` (${credit})` : ''}`
 }
 
 // Several creatures taking counters from one source is a single effect resolving.
+// Sagas at different chapters are not, whatever else they share.
 function sameCounter(a, b) {
   return a.source === b.source
     && a.counterKind === b.counterKind
     && a.added === b.added
     && a.amount === b.amount
+    && (a.counterKind !== 'Lore' || a.countAfter === b.countAfter)
 }
 
 function counterDescriber(run) {
@@ -2445,7 +2476,7 @@ function counterDescriber(run) {
   return {
     turn: run[0].turn,
     kind: 'counter',
-    text: counterPhrase(targets, run[0].added, run[0].amount, run[0].counterKind, run[0].source),
+    text: counterPhrase(targets, run[0].added, run[0].amount, run[0].counterKind, run[0].source, run[0].countAfter),
     seat: run[0].seat,
     card: null,
     cards: targets,
@@ -2453,6 +2484,7 @@ function counterDescriber(run) {
     amount: run[0].amount,
     counterKind: run[0].counterKind,
     source: run[0].source,
+    countAfter: run[0].countAfter,
   }
 }
 
@@ -2606,16 +2638,34 @@ function mergeSharedSource(events) {
   const MERGEABLE = new Set(['counter', 'destroy', 'exile', 'return', 'token', 'sacrifice', 'draw', 'gain'])
   const out = []
 
-  for (const event of events) {
-    const previous = out[out.length - 1]
-    const pairs = event.source
+  const canPair = (previous, event) => Boolean(event.source
       && previous
       && previous.source === event.source
       && MERGEABLE.has(event.kind)
       && MERGEABLE.has(previous.kind)
       && sameGrantSubject(previous, event)
+      // The same permanent, where both lines know which. Two copies of one card share a
+      // name, so the name alone let one Saga's chapter III sacrifice fold into the
+      // other Saga's lore counter beside it — the log reports both Sagas' counters
+      // first and the chapter triggers after.
+      && (previous.sourceId == null || event.sourceId == null || previous.sourceId === event.sourceId))
 
-    if (!pairs) {
+  // A copy's line between this one and its own copy's. Both Sagas' lore counters come
+  // first, so the chapter III sacrifice sits beside the *other* Saga's counter; reaching
+  // back over that one line lets it join its own. Only over a counter line known to be
+  // a different permanent of the same name, so nothing unrelated is ever skipped.
+  const skippable = (line, event) => line
+    && line.kind === 'counter'
+    && line.source === event.source
+    && line.sourceId != null && event.sourceId != null
+    && line.sourceId !== event.sourceId
+
+  for (const event of events) {
+    let at = out.length - 1
+    if (!canPair(out[at], event) && skippable(out[at], event) && canPair(out[at - 1], event)) at -= 1
+    const previous = out[at]
+
+    if (!canPair(previous, event)) {
       out.push(event)
       continue
     }
@@ -2652,7 +2702,7 @@ function mergeSharedSource(events) {
 
     if (shared) {
       const subjects = [...(previous.subjects || [previous.subject]), event.subject]
-      out[out.length - 1] = {
+      out[at] = {
         ...previous,
         text: `${joinList(subjects)} ${event.predicate.many}${suffix}`,
         card: null,
@@ -2675,7 +2725,7 @@ function mergeSharedSource(events) {
     // was named twice.
     const opening = sharedOpening(previous.lastClause || first, second, cards)
 
-    out[out.length - 1] = {
+    out[at] = {
       ...previous,
       text: `${first} and ${second.slice(opening.length)}${suffix}`,
       lastClause: second,
