@@ -2358,6 +2358,12 @@ button:disabled {
 
 /* Dotted rather than solid: it marks the name as inspectable without turning a line
    of narration into a row of links. */
+/* The separators inside a list of card names, coloured as the names are so a list
+   on a coloured line (damage, life) reads as one unit rather than striped. */
+.replay-sep {
+  color: #e7e9ea;
+}
+
 .replay-card {
   border-bottom: 1px dotted rgba(200, 208, 216, 0.45);
   color: #e7e9ea;

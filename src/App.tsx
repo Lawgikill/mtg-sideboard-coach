@@ -3397,6 +3397,7 @@ function ReplayText({ event, cardByName }: { event: MtgaGameEvent; cardByName: M
   const parts: ReactNode[] = []
   let plain = ''
   let at = 0
+  let afterCard = false
 
   while (at < event.text.length) {
     const hit = names.find((name) => event.text.startsWith(name, at))
@@ -3406,9 +3407,15 @@ function ReplayText({ event, cardByName }: { event: MtgaGameEvent; cardByName: M
       continue
     }
     if (plain) {
-      parts.push(plain)
+      // The punctuation joining two names in a list ("; ", "; and ", " and ") takes
+      // the names' colour, so the list reads as one unit. Left as plain text it took
+      // the line's colour instead, which on a red damage line striped "A; B; and C"
+      // red between white names.
+      const joinsNames = afterCard && /^[;,]?\s*(?:and\s+)?$/.test(plain)
+      parts.push(joinsNames ? <span className="replay-sep" key={parts.length}>{plain}</span> : plain)
       plain = ''
     }
+    afterCard = true
     const card = tokenPreviewAt(event.text, at, hit, event, cardByName) ?? cardByName.get(normalizeCardName(hit))
     parts.push(<ReplayCardName name={hit} card={card} key={parts.length} />)
     at += hit.length
