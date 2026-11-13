@@ -1996,21 +1996,42 @@ function runDescriber(verb) {
 // loyalty from the object, each reported once per message. So a target that changes
 // again later in the same message states its total only on the last change — on an
 // earlier one the number would already include blows not yet narrated.
+//
+// Simultaneous blows to one player can share a single life change. Combat damage is
+// dealt at once, and MTGA reports it as one `ModifiedLife` for the sum, credited to
+// the first attacker alone: Quantum Riddler's 5 and Duelist of the Mind's 3 arrived as
+// "loses 8 life to Quantum Riddler", which matched neither blow and so stood beside
+// them, stating the damage twice and pinning all of it on one creature. Such a change
+// is claimed by the whole group when it is exactly the sum of every hit on that player
+// in the message, and its total goes on the last hit — the one the combat collapse
+// reads its total from.
 function mergeDamageResults(events) {
   const STEP_KINDS = new Set(['damage', 'counter', 'life'])
   const claimed = new Set()
+  // Hits whose shared life change was claimed by their group: the last takes the
+  // total (damage index -> result index), the rest pass through as they are.
+  const groupTotal = new Map()
+  const groupMember = new Set()
   const out = []
 
   for (let i = 0; i < events.length; i += 1) {
     if (claimed.has(i)) continue
     const damage = events[i]
 
-    let match = -1
-    if (damage.kind === 'damage') {
+    let match = groupTotal.get(i) ?? -1
+    if (damage.kind === 'damage' && match === -1 && !groupMember.has(i)) {
       for (let j = i + 1; j < events.length && STEP_KINDS.has(events[j].kind); j += 1) {
         if (!claimed.has(j) && isDamageResult(damage, events[j])) {
           match = j
           break
+        }
+      }
+      if (match === -1) {
+        const shared = sharedLifeResult(events, i, claimed)
+        if (shared) {
+          claimed.add(shared.result)
+          for (const hit of shared.hits.slice(0, -1)) groupMember.add(hit)
+          groupTotal.set(shared.hits[shared.hits.length - 1], shared.result)
         }
       }
     }
@@ -2022,6 +2043,7 @@ function mergeDamageResults(events) {
 
     const result = events[match]
     claimed.add(match)
+    groupTotal.delete(i)
     const isLife = result.kind === 'life'
     const total = isLife ? result.total : result.loyaltyAfter
     const stated = total != null && !changesAgainInMessage(events, match)
@@ -2038,6 +2060,35 @@ function mergeDamageResults(events) {
   }
 
   return out
+}
+
+// The single life change paying for several hits on one player, if there is one: every
+// unclaimed hit on that player in the damage step's message, starting at `first`, and a
+// life change in the same message for exactly their sum, credited to one of them. Only
+// for two or more hits — one is the ordinary pairing — and only to a player, since a
+// planeswalker's loyalty is reported per blow.
+function sharedLifeResult(events, first, claimed) {
+  const STEP_KINDS = new Set(['damage', 'counter', 'life'])
+  const opening = events[first]
+  if (opening.msg == null) return null
+  const hits = []
+  let result = -1
+  let sum = 0
+  for (let j = first; j < events.length && STEP_KINDS.has(events[j].kind); j += 1) {
+    const event = events[j]
+    if (claimed.has(j) || event.msg !== opening.msg) continue
+    if (event.kind === 'damage' && event.targetId === opening.targetId) {
+      hits.push(j)
+      sum += event.amount
+    } else if (event.kind === 'life' && event.seat === opening.targetId && result === -1) {
+      result = j
+    }
+  }
+  if (hits.length < 2 || result === -1) return null
+  const life = events[result]
+  if (life.delta !== -sum) return null
+  if (!hits.some((hit) => events[hit].card === life.card)) return null
+  return { hits, result }
 }
 
 // The life or loyalty a blow took, as opposed to any other change to the same player
