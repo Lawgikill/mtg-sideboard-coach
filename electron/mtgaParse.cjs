@@ -1033,7 +1033,24 @@ class LogParser {
       // that follows it, so printing both only pads the turn.
       if (object.blockState === 'BlockState_Blocked') {
         const name = this.nameOf(id) || 'A creature'
-        this.push('block', `${name} is blocked`, { seat: object.controllerSeatId })
+        // By what, and how big each side is. The attacker's `attackInfo.orderedBlockers`
+        // names the blockers in the same update that marks it blocked; "Nova Hellkite
+        // is blocked" left the blocker to be guessed from the damage line below.
+        const blockerIds = ((object.attackInfo && object.attackInfo.orderedBlockers) || [])
+          .map((blocker) => blocker.instanceId)
+          .filter((blockerId) => blockerId != null)
+        const blockers = blockerIds.map((blockerId) => {
+          const blockerName = this.nameOf(blockerId)
+          const stats = this.statsLabel(blockerId)
+          return blockerName ? { label: `${blockerName}${stats ? ` ${stats}` : ''}`, name: blockerName } : null
+        }).filter(Boolean)
+        const stats = this.statsLabel(id)
+        const by = blockers.length > 0 ? ` by ${joinList(countedList(blockers.map((blocker) => blocker.label)))}` : ''
+        this.push('block', `${name}${stats ? ` ${stats}` : ''} is blocked${by}`, {
+          seat: object.controllerSeatId,
+          card: this.nameOf(id),
+          cards: blockers.map((blocker) => blocker.name),
+        })
       }
     }
   }
@@ -1616,7 +1633,13 @@ class LogParser {
         // Low ids are seats; anything else is a permanent on the battlefield.
         const hitsPlayer = this.seatNames[targetId] !== undefined
         const targetName = hitsPlayer ? null : this.nameOf(targetId)
-        const target = hitsPlayer ? this.seatLabel(targetId) : (targetName || 'a permanent')
+        // A creature taking damage shows its size, so the line says whether the hit
+        // was lethal without looking it up. Read off the object, which damage does
+        // not change; a planeswalker has no P/T and shows its loyalty instead.
+        const targetStats = hitsPlayer ? '' : this.statsLabel(targetId)
+        const target = hitsPlayer
+          ? this.seatLabel(targetId)
+          : `${targetName || 'a permanent'}${targetStats ? ` ${targetStats}` : ''}`
         // A creature's size as it deals combat damage (`type` 1; a ping or a burn
         // spell is 2), which is when size decides anything. It used to ride on the
         // attack line, but creatures grow mid-combat: Pompous Battlemage's prowess
