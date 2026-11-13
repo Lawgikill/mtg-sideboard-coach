@@ -2587,8 +2587,23 @@ function sharedOpening(first, second, names = []) {
   return splitsName ? '' : opening
 }
 
+// A granted keyword merges only into a line about the same permanent: "Quantum
+// Riddler gets a +1/+1 counter and gains haste (The Naked Time)", one trigger doing
+// two things to one creature. Across two different subjects it read badly both ways
+// it occurred — "gains lifelink and ward {2} and Duelist of the Mind is exiled", where
+// the exile reads as something granted, and a token copy followed by its own long
+// name gaining haste. Both clauses must open with that permanent's name, the last
+// clause of an already merged line included.
+function sameGrantSubject(previous, event) {
+  if (previous.kind !== 'gain' && event.kind !== 'gain') return true
+  const name = (previous.kind === 'gain' ? previous : event).card
+  if (!name) return false
+  const opens = (text) => text.startsWith(`${name} `)
+  return opens(previous.lastClause || previous.text) && opens(event.text)
+}
+
 function mergeSharedSource(events) {
-  const MERGEABLE = new Set(['counter', 'destroy', 'exile', 'return', 'token', 'sacrifice', 'draw'])
+  const MERGEABLE = new Set(['counter', 'destroy', 'exile', 'return', 'token', 'sacrifice', 'draw', 'gain'])
   const out = []
 
   for (const event of events) {
@@ -2598,6 +2613,7 @@ function mergeSharedSource(events) {
       && previous.source === event.source
       && MERGEABLE.has(event.kind)
       && MERGEABLE.has(previous.kind)
+      && sameGrantSubject(previous, event)
 
     if (!pairs) {
       out.push(event)
