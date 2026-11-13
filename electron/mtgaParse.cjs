@@ -230,6 +230,8 @@ class LogParser {
     this.objectLoyalty = new Map()
     // Instances that are copies (`isCopy`), such as an offspring token.
     this.objectCopies = new Set()
+    // instanceId -> the instance it is a copy of (`parentId`).
+    this.objectParent = new Map()
     // instanceId -> { creature, onBattlefield } as last reported, to notice a permanent
     // that turns into a creature.
     this.objectShape = new Map()
@@ -714,6 +716,10 @@ class LogParser {
       this.noticeAnimation(object)
 
       // Presence-authoritative, like isTapped: protobuf drops a false.
+      // What a copy was made from. A prepared spell's copy names the creature it was
+      // prepared on, but only while it waits in exile — the field is gone once it is
+      // cast and renumbered, so it is kept and carried across ObjectIdChanged.
+      if (object.parentId != null) this.objectParent.set(object.instanceId, object.parentId)
       if (object.isCopy) this.objectCopies.add(object.instanceId)
       else this.objectCopies.delete(object.instanceId)
       // Live power/toughness: counters, equipment, pumps and conditional bonuses are
@@ -904,6 +910,7 @@ class LogParser {
       this.objectStats = new Map()
       this.objectLoyalty = new Map()
       this.objectCopies = new Set()
+      this.objectParent = new Map()
       this.objectShape = new Map()
       this.abilitySource = new Map()
       this.abilityInstanceOwner = new Map()
@@ -1306,6 +1313,8 @@ class LogParser {
       // The creature is renamed in the same message it dies, just before its transfer.
       const damagedBy = this.damagedBy.get(details.orig_id)
       if (damagedBy) this.damagedBy.set(details.new_id, damagedBy)
+      const parent = this.objectParent.get(details.orig_id)
+      if (parent != null) this.objectParent.set(details.new_id, parent)
     }
 
     if (types.includes('AnnotationType_ZoneTransfer')) this.narrateZoneTransfer(annotation, details)
@@ -1687,8 +1696,16 @@ class LogParser {
         // A copy says so, read off the object's `isCopy` in this message: a prepared
         // spell is a copy of the card's other half, kept in exile, so "casts
         // Improvised Act from exile" read as if the card itself had been exiled.
-        const what = this.objectCopies.has(instanceId) ? `a copy of ${card}` : card
-        this.push('cast', `${who} casts ${what}${origin}`, { seat, card: name, instanceId, fromZone: fromKind })
+        const isCopy = this.objectCopies.has(instanceId)
+        const what = isCopy ? `a copy of ${card}` : card
+        // The card it is a copy of, which the log names (`parentId`). Credited at the
+        // end of the line once every merge has run (see finish), so it lands after
+        // any targets or choices rather than in the middle of them.
+        const parent = isCopy ? this.objectParent.get(instanceId) : null
+        const copyOf = parent != null ? this.nameOf(parent) : null
+        this.push('cast', `${who} casts ${what}${origin}`, {
+          seat, card: name, instanceId, fromZone: fromKind, copyOf: copyOf || undefined,
+        })
         this.castingOpen = true
         return undefined
       }
@@ -1983,6 +2000,11 @@ class LogParser {
       events = collapseRuns(events, 'token', tokenDescriber, sameToken)
       events = mergeScryDraw(events)
       events = mergeSharedSource(events)
+      // A cast copy credits what it was copied from, last, after anything the passes
+      // above appended to the cast line. Not a `source`: no merge should pair on it.
+      events = events.map((event) => (event.copyOf
+        ? { ...event, text: `${event.text} (${event.copyOf})`, cards: [...(event.cards || []), event.copyOf] }
+        : event))
 
       // The narration otherwise just stops, which reads the same whether the game
       // ended or the log ran out. Appended after every pass so none can fold it in.
