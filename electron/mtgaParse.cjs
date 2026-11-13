@@ -232,6 +232,9 @@ class LogParser {
     this.objectCopies = new Set()
     // instanceId -> the instance it is a copy of (`parentId`).
     this.objectParent = new Map()
+    // instanceId -> the id it had before its last ObjectIdChanged, so a card that just
+    // left the battlefield can still be described as it was there.
+    this.renamedFrom = new Map()
     // instanceId -> { creature, onBattlefield } as last reported, to notice a permanent
     // that turns into a creature.
     this.objectShape = new Map()
@@ -301,7 +304,9 @@ class LogParser {
   recordTargets(sourceId, targetIds) {
     if (!this.game) return
 
-    const labels = targetIds.map((id) => this.targetLabel(id)).filter(Boolean)
+    const labels = targetIds.map((id) => (this.seatNames[id] !== undefined
+      ? this.targetLabel(id)
+      : `${this.targetLabel(id)}${this.sizeOf(id)}`)).filter(Boolean)
     const cards = targetIds.map((id) => this.nameOf(id)).filter(Boolean)
 
     for (let i = this.game.events.length - 1; i >= 0; i -= 1) {
@@ -879,8 +884,9 @@ class LogParser {
       // credit; anything else names what did it.
       const source = this.sourceOf(annotation.affectorId)
       const credit = source && targets.some((name) => name !== source) ? source : null
+      const labels = fresh.map((id) => this.sized(id)).filter(Boolean)
       this.push('gain',
-        `${joinList(countedList(targets))} ${targets.length > 1 ? 'gain' : 'gains'} ${joinList(abilities)}` +
+        `${joinList(countedList(labels))} ${targets.length > 1 ? 'gain' : 'gains'} ${joinList(abilities)}` +
           `${credit ? ` (${credit})` : ''}`,
         {
           seat: this.objectController.get(fresh[0]),
@@ -917,6 +923,7 @@ class LogParser {
       this.objectLoyalty = new Map()
       this.objectCopies = new Set()
       this.objectParent = new Map()
+      this.renamedFrom = new Map()
       this.objectShape = new Map()
       this.abilitySource = new Map()
       this.abilityInstanceOwner = new Map()
@@ -1003,6 +1010,35 @@ class LogParser {
     const stats = this.objectStats.get(instanceId)
     if (!stats || stats.power == null || stats.toughness == null) return ''
     return `(${stats.power}/${stats.toughness})`
+  }
+
+  // A creature's size as a suffix, for any line naming a creature on the battlefield:
+  // " (4/3)", or nothing. Every mention carries it, so counters, pumps and prowess all
+  // show up the same way — as the number next to the name. The size is the creature's
+  // after this message, since the log reports the state each update ends in.
+  //
+  // `anyZone` lets a spell on the stack report the size it was cast at (Guiding Hydra
+  // is 1/0 there, 4/3 once it resolves with its counters in the same update).
+  sizeOf(instanceId, anyZone = false) {
+    if (instanceId == null) return ''
+    if (!(this.objectTypes.get(instanceId) || []).includes('CardType_Creature')) return ''
+    if (!anyZone && this.zoneKind(this.objectZone.get(instanceId)) !== 'battlefield') return ''
+    const stats = this.statsLabel(instanceId)
+    return stats ? ` ${stats}` : ''
+  }
+
+  sized(instanceId, name = this.nameOf(instanceId), anyZone = false) {
+    return name ? `${name}${this.sizeOf(instanceId, anyZone)}` : name
+  }
+
+  // The last size a card had on the battlefield, for the line saying it left. The
+  // transfer names the card in its new zone, where it is a fresh object at its printed
+  // size, so the size comes from the id it had before being renumbered. That old id
+  // is re-sent in the same update parked in Limbo, still carrying its last battlefield
+  // size (Nova Hellkite's read 5/6 there while the new one in exile read 4/5), so the
+  // zone check is skipped: every caller is already a battlefield departure.
+  sizedDeparted(instanceId, name) {
+    return this.sized(this.renamedFrom.get(instanceId) ?? instanceId, name, true)
   }
 
   trackCombat(object) {
@@ -1268,7 +1304,7 @@ class LogParser {
   reportResolve(instanceId) {
     const name = this.nameOf(instanceId)
     if (!name) return
-    this.push('resolve', `${name} resolves`, {
+    this.push('resolve', `${this.sized(instanceId, name, true)} resolves`, {
       seat: this.objectController.get(instanceId),
       card: name,
     })
@@ -1346,6 +1382,7 @@ class LogParser {
       if (damagedBy) this.damagedBy.set(details.new_id, damagedBy)
       const parent = this.objectParent.get(details.orig_id)
       if (parent != null) this.objectParent.set(details.new_id, parent)
+      this.renamedFrom.set(details.new_id, details.orig_id)
     }
 
     if (types.includes('AnnotationType_ZoneTransfer')) this.narrateZoneTransfer(annotation, details)
@@ -1384,15 +1421,21 @@ class LogParser {
         const isCopy = this.objectCopies.has(id)
         const stats = this.objectStats.get(id) || {}
         const size = stats.power != null && stats.toughness != null ? `${stats.power}/${stats.toughness}` : ''
+        // A creature token carries its size like any creature ("a Soldier token
+        // (1/1)"); a copy already states it in front.
+        const creatureSize = !isCopy && size && (this.objectTypes.get(id) || []).includes('CardType_Creature')
+          ? ` (${size})`
+          : ''
         const what = isCopy
           ? `a ${size ? `${size} ` : ''}token copy of ${token || 'a permanent'}`
-          : `${withArticle(token || 'token')} token`
+          : `${withArticle(token || 'token')} token${creatureSize}`
         this.push('token', `${this.seatLabel(seat)} creates ${what}${credit}`, {
           seat,
           card: token,
           source,
           isCopy,
           size,
+          creatureSize,
           // Which token this is, for the hover: the renderer looks it up by name and
           // size among *tokens*, since the plain name belongs to the real card.
           tokenRefs: token ? [{ name: token, power: stats.power, toughness: stats.toughness }] : [],
@@ -1420,7 +1463,9 @@ class LogParser {
         // removed down to none has no annotation left to report it, so says nothing.
         const countAfter = this.counterTotals.get(`${id}:${details.counter_type}`)
 
-        this.push('counter', counterPhrase([{ name: target, total: countAfter }], added, amount, kind, source), {
+        const label = this.sized(id, target)
+        this.push('counter', counterPhrase([{ name: target, total: countAfter, label }], added, amount, kind, source), {
+          label,
           seat: this.objectController.get(id),
           card: target,
           added,
@@ -1529,7 +1574,7 @@ class LogParser {
         this.game.events.splice(at, 0, {
           turn: this.turn,
           kind: 'activate',
-          text: `${this.seatLabel(annotation.affectorId)} activates ${source}${effect ? `: ${effect}` : ''}`,
+          text: `${this.seatLabel(annotation.affectorId)} activates ${source}${this.sizeOf(this.abilityInstanceOwner.get(abilityId))}${effect ? `: ${effect}` : ''}`,
           seat: annotation.affectorId,
           card: source,
           targetLabels: aimed ? aimed.labels : undefined,
@@ -1545,7 +1590,9 @@ class LogParser {
       const aura = this.nameOf(annotation.affectorId)
       const targetId = (annotation.affectedIds || [])[0]
       if (aura && targetId != null) {
-        const attachedTo = this.targetLabel(targetId)
+        const attachedTo = this.seatNames[targetId] !== undefined
+          ? this.targetLabel(targetId)
+          : `${this.targetLabel(targetId)}${this.sizeOf(targetId)}`
         this.push('attach', `${aura} attaches to ${attachedTo}`, {
           seat: this.objectController.get(annotation.affectorId),
           card: aura,
@@ -1625,9 +1672,9 @@ class LogParser {
         const fromKeyword = Boolean(keyword) && source === target
         const how = fromKeyword ? ` from ${keyword}` : ''
         const credit = source && !fromKeyword ? source : null
-        const stats = this.statsLabel(id).replace(/^\(/, '(now ')
+        // The size beside the name, as on every creature line, is the size after.
         this.push('pump',
-          `${target} gets ${signed(details.power)}/${signed(details.toughness)}${how}${stats ? ` ${stats}` : ''}`
+          `${this.sized(id, target)} gets ${signed(details.power)}/${signed(details.toughness)}${how}`
             + `${credit ? ` (${credit})` : ''}`,
           { seat: this.objectController.get(id), card: target, source: credit })
       }
@@ -1648,12 +1695,11 @@ class LogParser {
         const target = hitsPlayer
           ? this.seatLabel(targetId)
           : `${targetName || 'a permanent'}${targetStats ? ` ${targetStats}` : ''}`
-        // A creature's size as it deals combat damage (`type` 1; a ping or a burn
-        // spell is 2), which is when size decides anything. It used to ride on the
-        // attack line, but creatures grow mid-combat: Pompous Battlemage's prowess
+        // A creature's size as it deals the damage, in combat or out, like every line
+        // naming a creature. Creatures grow mid-combat — Pompous Battlemage's prowess
         // triggered after blockers and Duelist of the Mind drew off a crime, so the
-        // attack line summed to 11 over 13 damage. Here the sizes add up to the damage.
-        const stats = details.type === 1 ? this.statsLabel(annotation.affectorId) : ''
+        // attack line summed to 11 over 13 damage — and these sizes add up to it.
+        const stats = this.sizeOf(annotation.affectorId).trim()
         this.push('damage', `${source || 'Something'}${stats ? ` ${stats}` : ''} deals ${amount} damage to ${target}`, {
           amount,
           targetId,
@@ -1687,7 +1733,7 @@ class LogParser {
   // facts only meet here. Credited only when exactly one card fits; otherwise the line
   // stands without a credit. A destroy names its own cause, which is used first.
   narrateRedirectedDeath(instanceId, name, toKind, seat, instead, knownCause = null) {
-    const subject = name || 'a card'
+    const subject = this.sizedDeparted(instanceId, name || 'a card')
     const fits = [...(this.damagedBy.get(instanceId) || [])].filter((source) => this.replacementSources.has(source))
     const cause = knownCause || (fits.length === 1 ? fits[0] : null)
     const where = toKind === 'exile' ? 'is exiled' : `is put into ${toKind}`
@@ -1749,7 +1795,9 @@ class LogParser {
         // spell is a copy of the card's other half, kept in exile, so "casts
         // Improvised Act from exile" read as if the card itself had been exiled.
         const isCopy = this.objectCopies.has(instanceId)
-        const what = isCopy ? `a copy of ${card}` : card
+        // A creature spell carries the size it was cast at, read off the stack object.
+        const sizedCard = name ? this.sized(instanceId, name, true) : card
+        const what = isCopy ? `a copy of ${sizedCard}` : sizedCard
         // The card it is a copy of, which the log names (`parentId`). Credited at the
         // end of the line once every merge has run (see finish), so it lands after
         // any targets or choices rather than in the middle of them.
@@ -1772,7 +1820,7 @@ class LogParser {
       // and the owner chose not to have it inferred from what is on the battlefield.
       case 'Resolve':
         if (toKind === 'battlefield' && this.objectTapped.get(instanceId)) {
-          return this.push('tapped', `${card} enters tapped`, { seat, card: name })
+          return this.push('tapped', `${name ? this.sized(instanceId, name) : card} enters tapped`, { seat, card: name })
         }
         return undefined
       case 'Discard': {
@@ -1796,7 +1844,7 @@ class LogParser {
         if (toKind && toKind !== 'graveyard') {
           return this.narrateRedirectedDeath(instanceId, name, toKind, seat, 'going to the graveyard', cause)
         }
-        const subject = this.nameOf(instanceId) || card
+        const subject = this.sizedDeparted(instanceId, this.nameOf(instanceId) || card)
         return this.push('destroy', `${subject} is destroyed${cause ? ` (${cause})` : ''}`, {
           seat,
           card: name,
@@ -1806,7 +1854,7 @@ class LogParser {
         })
       }
       case 'Sacrifice': {
-        const sacrificed = this.nameOf(instanceId) || card
+        const sacrificed = this.sizedDeparted(instanceId, this.nameOf(instanceId) || card)
 
         // Cashing in a Treasure, Clue or Food. Mana abilities are otherwise silent —
         // they fire ~80 times a match for land taps — but one that eats the
@@ -1828,7 +1876,9 @@ class LogParser {
       case 'Exile':
       {
         const cause = this.causeOf(annotation, name)
-        const subject = this.nameOf(instanceId) || card
+        const subject = fromKind === 'battlefield'
+          ? this.sizedDeparted(instanceId, this.nameOf(instanceId) || card)
+          : this.nameOf(instanceId) || card
         const owner = this.zoneOwner(details.zone_src)
         const origin = departureZone(fromKind, owner, this.seatLabel(owner))
         return this.push('exile', `${subject} is exiled${origin}${cause ? ` (${cause})` : ''}`, {
@@ -1846,7 +1896,7 @@ class LogParser {
       // there. The delayed trigger behind it names only the card itself, so the
       // mechanic is the cause worth stating. Not a card name, so not a `source`.
       case 'Warp': {
-        const subject = this.nameOf(instanceId) || card
+        const subject = this.sizedDeparted(instanceId, this.nameOf(instanceId) || card)
         return this.push('exile', `${subject} is exiled by warp`, {
           fromZone: fromKind,
           seat,
@@ -1858,7 +1908,9 @@ class LogParser {
       case 'Return':
       {
         const cause = this.causeOf(annotation, name)
-        const subject = this.nameOf(instanceId) || card
+        const subject = fromKind === 'battlefield'
+          ? this.sizedDeparted(instanceId, this.nameOf(instanceId) || card)
+          : this.nameOf(instanceId) || card
         const where = toKind || 'another zone'
         const owner = this.zoneOwner(details.zone_src)
         const origin = departureZone(fromKind, owner, this.seatLabel(owner))
@@ -1896,7 +1948,8 @@ class LogParser {
         if (toKind && toKind !== 'graveyard') {
           return this.narrateRedirectedDeath(instanceId, name, toKind, seat, 'dying')
         }
-        return this.push('destroy', `${this.nameOf(instanceId) || card} dies`, { seat, card: name })
+        return this.push('destroy', `${this.sizedDeparted(instanceId, this.nameOf(instanceId) || card)} dies`,
+          { seat, card: name })
 
       // An aura or equipment falling off because what it was attached to left.
       case 'SBA_UnattachedAura':
@@ -1979,9 +2032,13 @@ class LogParser {
           // Held so the search line can absorb these rather than repeat them.
           this.pendingSearch.absorbed.push(this.game.events.length)
         }
-        this.push('select', `${who} puts ${card}${origin} ${destination}${cause ? ` (${cause})` : ''}`, {
+        // Only a creature put onto the battlefield gets a label: a face-down card has to
+        // stay unnamed so a merged line can count it ("2 cards").
+        const label = toKind === 'battlefield' && name ? this.sized(instanceId, name) : undefined
+        this.push('select', `${who} puts ${label || card}${origin} ${destination}${cause ? ` (${cause})` : ''}`, {
           seat,
           card: name,
+          label,
           destination,
           origin,
           source: cause,
@@ -2266,7 +2323,7 @@ function tokenDescriber(run) {
   // ("2 1/1 token copies").
   const what = run[0].isCopy
     ? `${run.length} token copies of ${name}${run[0].size ? `, each ${run[0].size}` : ''}`
-    : `${run.length} ${name} tokens`
+    : `${run.length} ${name} tokens${run[0].creatureSize || ''}`
   return { ...run[0], text: `${who} creates ${what}${credit}` }
 }
 
@@ -2626,25 +2683,30 @@ function mergeResolveAttach(events) {
 // One phrasing for a counter line, so a single creature and a merged run cannot
 // drift apart. "a +1/+1 counter" rather than "1 counter" reads as English.
 //
-// `entries` are `{ name, total }`: each permanent and the count of that kind it was
-// left with. The total is what a counter line is usually read for — a creature's
-// +1/+1 counters are its size, a planeswalker's loyalty its distance from an ultimate,
-// and a Saga's lore count its chapter, which is how two Sagas ticking up together,
-// one to III and one to II, had merged into "2 The Naked Time get a Lore counter" and
-// hidden which was which. One permanent states it after the counter ("loses a +1/+1
-// counter (now 2)"); a list states it after each name, so a run need not split for
-// its permanents to differ ("Nova Hellkite (now 2) and Starfield Shepherd (now 1) get
-// a +1/+1 counter"). A count removed down to none has no total in the log — the
-// running count is deleted rather than reported as 0 — so says nothing.
+// `entries` are `{ name, total, label }`: each permanent, the count of that kind it
+// was left with, and its name with its size when it is a creature on the battlefield.
+//
+// **A creature's size is shown, not its +1/+1 count.** The size beside the name says
+// what the counters did, along with every pump and prowess trigger, in one form used
+// on every line naming a creature ("Guiding Hydra (3/2) loses a +1/+1 counter and
+// Nova Hellkite (6/7) and Starfield Shepherd (4/3) get a +1/+1 counter"). So the
+// running total is left off +1/+1 and -1/-1 counters, and kept for every other kind,
+// which a size cannot show: a Saga's lore count is its chapter — two Sagas ticking up
+// together, one to III and one to II, had merged into "2 The Naked Time get a Lore
+// counter" and hidden which was which — and Charge, Quest and Stun counts are the
+// whole point of their lines. One permanent states its total after the counter; a
+// list states it after each name. A count removed down to none has no total in the
+// log — the running count is deleted rather than reported as 0 — so says nothing.
 function counterPhrase(entries, added, amount, kind, source) {
   const single = entries.length === 1
-  const label = (entry) => (entry.total != null ? `${entry.name} (now ${entry.total})` : entry.name)
-  const subject = single ? entries[0].name : joinList(countedList(entries.map(label)))
-  const countAfter = single ? entries[0].total : null
+  const sizesShowIt = /^[+-]1\/[+-]1$/.test(kind || '')
+  const named = (entry) => entry.label || entry.name
+  const label = (entry) => (entry.total != null && !sizesShowIt ? `${named(entry)} (now ${entry.total})` : named(entry))
+  const subject = single ? named(entries[0]) : joinList(countedList(entries.map(label)))
+  const countAfter = single && !sizesShowIt ? entries[0].total : null
   const lore = kind === 'Lore' && countAfter != null
-  // A permanent's first counters of a kind already say how many it has: "gets 3 +1/+1
-  // counters (now 3)" restated the line, and stacked a second parenthetical beside the
-  // credit on every first Stun or +1/+1 counter. Lore keeps it — chapter I is a
+  // A permanent's first counters of a kind already say how many it has: "gets 2
+  // Charge counters (now 2)" restated the line. Lore keeps it — chapter I is a
   // chapter — and so does a list, where every name carries one.
   const fresh = added && countAfter === amount && !lore
   const total = countAfter != null && !fresh ? ` (now ${countAfter})` : ''
@@ -2680,7 +2742,7 @@ function sameCounter(a, b) {
 function counterDescriber(run) {
   const named = run.filter((entry) => entry.card)
   const targets = named.map((entry) => entry.card)
-  const entries = named.map((entry) => ({ name: entry.card, total: entry.countAfter }))
+  const entries = named.map((entry) => ({ name: entry.card, total: entry.countAfter, label: entry.label }))
   return {
     turn: run[0].turn,
     kind: 'counter',
@@ -2728,7 +2790,7 @@ function selectDescriber(run) {
   const shuffled = run.some((entry) => entry.shuffled) ? ' and shuffles' : ''
 
   if (destinations.size === 1) {
-    const labels = cardLabels(run.map((entry) => entry.card), run.length)
+    const labels = cardLabels(run.map((entry) => entry.label || entry.card), run.length)
     return {
       turn: run[0].turn,
       kind: 'select',
@@ -2742,7 +2804,7 @@ function selectDescriber(run) {
     }
   }
 
-  const fragments = run.map((entry) => `${entry.card || 'a card'}${entry.origin || ''} ${entry.destination}`)
+  const fragments = run.map((entry) => `${entry.label || entry.card || 'a card'}${entry.origin || ''} ${entry.destination}`)
   return {
     turn: run[0].turn,
     kind: 'select',
